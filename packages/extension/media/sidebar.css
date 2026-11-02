@@ -96,6 +96,18 @@ button.wide {
   font-size: 0.85em;
 }
 
+h3 {
+  margin: 10px 0 2px;
+  font-size: 0.95em;
+  font-weight: 600;
+}
+
+summary {
+  margin-top: 4px;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+}
+
 .feed-item {
   padding: 6px 0;
   border-bottom: 1px solid var(--vscode-panel-border, transparent);

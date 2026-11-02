@@ -264,6 +264,175 @@ test("an outsider calling the broker directly learns nothing and changes nothing
   assert.deepEqual(searched.data, []);
 });
 
+const assumptionId = async (questionId: string, text: string) => {
+  const { data } = await admin.from("assumptions").select("id").eq("question_id", questionId).eq("text", text).single();
+  return data!.id as string;
+};
+
+test("rejecting an assumption tells every agent on the question exactly once, and leaves it open", async () => {
+  const { leadAgent, bobAgent, carolAgent } = await newTeam();
+  const { question_id } = await call(bobAgent, "ask", { question: QUESTION, context: "Auth", assumption: "30 minutes" });
+  await call(carolAgent, "join_question", { question_id, assumption: "1 hour" });
+
+  const rejected = await lead.supabase.rpc("reject_assumption", {
+    target_assumption: await assumptionId(question_id, "30 minutes"),
+    reason: "Use 37 minutes",
+  });
+  assert.ifError(rejected.error);
+
+  const context = await call(carolAgent, "get_context");
+  assert.equal(context.notices_ready, 1);
+  for (const agent of [bobAgent, carolAgent]) {
+    const { notices, answers, still_pending } = await call(agent, "check_answers");
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].kind, "assumption_rejected");
+    assert.equal(notices[0].question, QUESTION);
+    assert.match(notices[0].message, /30 minutes/);
+    assert.match(notices[0].message, /Use 37 minutes/);
+    assert.deepEqual(answers, []);
+    assert.deepEqual(still_pending, [question_id]);
+    assert.deepEqual((await call(agent, "check_answers")).notices, [], "delivered once");
+  }
+  assert.deepEqual((await call(leadAgent, "check_answers")).notices, [], "the lead's agent wasn't on this question");
+
+  const { data: question } = await admin.from("questions").select("status").eq("id", question_id).single();
+  assert.equal(question!.status, "open");
+  const again = await lead.supabase.rpc("reject_assumption", { target_assumption: await assumptionId(question_id, "30 minutes"), reason: "x" });
+  assert.match(again.error!.message, /no longer pending/);
+});
+
+test("a held check_answers ends as soon as a notice arrives", async () => {
+  const { bobAgent } = await newTeam();
+  const { question_id } = await call(bobAgent, "ask", { question: QUESTION, context: "Auth", assumption: "30 minutes" });
+  const id = await assumptionId(question_id, "30 minutes");
+  const started = Date.now();
+  const held = call(bobAgent, "check_answers", { wait_seconds: 60 });
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await lead.supabase.rpc("reject_assumption", { target_assumption: id, reason: "Wrong" });
+  const { notices } = await held;
+  assert.equal(notices.length, 1);
+  assert.ok(Date.now() - started < 20_000, "it didn't wait out the full minute");
+});
+
+test("confirming an assumption answers its question, and each agent sees what it assumed", async () => {
+  const { teamId, bobAgent, carolAgent } = await newTeam();
+  const { question_id } = await call(bobAgent, "ask", { question: QUESTION, context: "Auth", assumption: "30 minutes" });
+  await call(carolAgent, "join_question", { question_id, assumption: "1 hour" });
+
+  const confirmed = await lead.supabase.rpc("confirm_assumption", { target_assumption: await assumptionId(question_id, "30 minutes") });
+  assert.ifError(confirmed.error);
+
+  const forBob = (await call(bobAgent, "check_answers")).answers[0];
+  assert.equal(forBob.answer, "30 minutes");
+  assert.equal(forBob.your_assumption, "30 minutes");
+  const forCarol = (await call(carolAgent, "check_answers")).answers[0];
+  assert.equal(forCarol.answer, "30 minutes");
+  assert.equal(forCarol.your_assumption, "1 hour");
+
+  const { data: assumptions } = await admin.from("assumptions").select("text, status").eq("team_id", teamId).order("text");
+  assert.deepEqual(assumptions, [{ text: "1 hour", status: "pending" }, { text: "30 minutes", status: "confirmed" }]);
+  const { data: decision } = await admin.from("decisions").select("id").eq("id", confirmed.data).single();
+  assert.ok(decision);
+});
+
+test("changing a decision tells the whole team, and the new one takes over", async () => {
+  const { teamId, leadAgent, bobAgent, carolAgent } = await newTeam();
+  const { question_id } = await call(bobAgent, "ask", { question: QUESTION, context: "Auth" });
+  const { data: oldId } = await lead.supabase.rpc("answer_question", { target_question: question_id, answer: "37 minutes" });
+  await call(bobAgent, "check_answers");
+
+  const changed = await lead.supabase.rpc("change_decision", { target_decision: oldId, new_text: "99 minutes" });
+  assert.ifError(changed.error);
+
+  for (const agent of [leadAgent, bobAgent, carolAgent]) {
+    const { notices } = await call(agent, "check_answers");
+    assert.equal(notices.length, 1);
+    assert.equal(notices[0].kind, "decision_changed");
+    assert.match(notices[0].message, /37 minutes/);
+    assert.match(notices[0].message, /99 minutes/);
+    assert.equal(notices[0].question, QUESTION);
+  }
+  const { active_decisions } = await call(carolAgent, "get_context");
+  assert.deepEqual(active_decisions.map((decision: { text: string }) => decision.text), ["99 minutes"]);
+  const { data: question } = await admin.from("questions").select("status, decision_id").eq("id", question_id).single();
+  assert.deepEqual(question, { status: "answered", decision_id: changed.data });
+
+  const twice = await lead.supabase.rpc("change_decision", { target_decision: oldId, new_text: "1 minute" });
+  assert.match(twice.error!.message, /no longer active/);
+  assert.equal((await admin.from("decisions").select("id").eq("team_id", teamId)).data!.length, 2);
+});
+
+test("withdrawing a decision tells the whole team and reopens its question", async () => {
+  const { leadAgent, bobAgent, carolAgent } = await newTeam();
+  const { question_id } = await call(bobAgent, "ask", { question: QUESTION, context: "Auth" });
+  const { data: oldId } = await lead.supabase.rpc("answer_question", { target_question: question_id, answer: "37 minutes" });
+  await call(bobAgent, "check_answers");
+
+  const withdrawn = await lead.supabase.rpc("change_decision", { target_decision: oldId, new_text: null });
+  assert.ifError(withdrawn.error);
+
+  for (const agent of [leadAgent, bobAgent, carolAgent]) {
+    const { notices } = await call(agent, "check_answers");
+    assert.equal(notices[0].kind, "decision_withdrawn");
+    assert.match(notices[0].message, /37 minutes/);
+  }
+  const reopened = await call(carolAgent, "ask", { question: PARAPHRASE, context: "Auth" });
+  assert.equal(reopened.candidates[0].question_id, question_id);
+  assert.equal(reopened.candidates[0].status, "open");
+  assert.equal(reopened.candidates[0].answer, null);
+
+  await call(carolAgent, "join_question", { question_id });
+  const again = await lead.supabase.rpc("answer_question", { target_question: question_id, answer: "45 minutes" });
+  assert.ifError(again.error);
+  assert.equal((await call(carolAgent, "check_answers")).answers[0].answer, "45 minutes");
+});
+
+test("notices are private, and outsiders can't touch assumptions or decisions", async () => {
+  const { teamId, bobAgent } = await newTeam();
+  const { question_id } = await call(bobAgent, "ask", { question: QUESTION, context: "Auth", assumption: "30 minutes" });
+  const id = await assumptionId(question_id, "30 minutes");
+  await lead.supabase.rpc("reject_assumption", { target_assumption: id, reason: "Wrong" });
+
+  // A teammate can't read or clear someone else's notices.
+  assert.deepEqual((await carol.supabase.from("notices").select("id").eq("team_id", teamId)).data, []);
+  await carol.supabase.from("notices").delete().eq("team_id", teamId);
+  assert.equal((await admin.from("notices").select("id").eq("team_id", teamId)).data!.length, 1);
+
+  const { data: pending } = await admin
+    .from("assumptions")
+    .insert({ team_id: teamId, question_id, user_id: bob.userId, text: "Another" })
+    .select("id")
+    .single();
+  const { data: decisionId } = await lead.supabase.rpc("answer_question", { target_question: question_id, answer: "37 minutes" });
+
+  assert.deepEqual((await outsider.supabase.from("notices").select("id").eq("team_id", teamId)).data, []);
+  const inserted = await outsider.supabase
+    .from("notices")
+    .insert({ team_id: teamId, user_id: bob.userId, kind: "decision_withdrawn", about: "Forged" });
+  assert.ok(inserted.error);
+  assert.ok((await outsider.supabase.rpc("confirm_assumption", { target_assumption: pending!.id })).error);
+  assert.ok((await outsider.supabase.rpc("reject_assumption", { target_assumption: pending!.id, reason: "x" })).error);
+  assert.ok((await outsider.supabase.rpc("change_decision", { target_decision: decisionId, new_text: "Hacked" })).error);
+  const { data: decision } = await admin.from("decisions").select("text, status").eq("id", decisionId).single();
+  assert.deepEqual(decision, { text: "37 minutes", status: "active" });
+  assert.equal((await admin.from("notices").select("id").eq("team_id", teamId)).data!.length, 1);
+});
+
+test("claim_task warns about a teammate working on the same files", async () => {
+  const { bobAgent, carolAgent } = await newTeam();
+  const { task: bobTask } = await call(bobAgent, "create_task", { title: "Checkout", files: ["src/checkout.ts", "src/cart.ts"] });
+  await call(bobAgent, "claim_task", { task_id: bobTask.id });
+
+  const { task: shared } = await call(carolAgent, "create_task", { title: "Cart fix", files: ["src/cart.ts"] });
+  const claimed = await call(carolAgent, "claim_task", { task_id: shared.id });
+  assert.deepEqual(claimed.overlapping_tasks, [{ title: "Checkout", owner: "Bob", shared_files: ["src/cart.ts"] }]);
+
+  const { task: separate } = await call(carolAgent, "create_task", { title: "Docs", files: ["README.md"] });
+  assert.equal((await call(carolAgent, "claim_task", { task_id: separate.id })).overlapping_tasks, undefined);
+  const { task: noFiles } = await call(carolAgent, "create_task", { title: "Think" });
+  assert.equal((await call(carolAgent, "claim_task", { task_id: noFiles.id })).overlapping_tasks, undefined);
+});
+
 test("secrets are removed before a question is embedded or stored", async () => {
   const { bobAgent } = await newTeam();
   const secret = "sb_secret_abcdefghijklmnop123456";

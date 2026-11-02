@@ -189,7 +189,7 @@ test("a held check_answers returns the answer as soon as a teammate gives it, ex
   assert.ifError(updateError);
 
   const { answers, still_pending } = await waiting;
-  assert.deepEqual(answers, [{ question_id, question: "What discount?", answer: "17% off" }]);
+  assert.deepEqual(answers, [{ question_id, question: "What discount?", answer: "17% off", your_assumption: "10%" }]);
   assert.deepEqual(still_pending, []);
   assert.ok(Date.now() - startedAt >= 5000 && Date.now() - startedAt < 30_000);
   assert.deepEqual((await call(bobAgent, "check_answers")).answers, []);
@@ -200,7 +200,7 @@ test("a held check_answers gives up when wait_seconds runs out", async () => {
   const { question_id } = await call(aliceAgent, "ask", { question: "Unanswered?", context: "Test", confirmed_new: true });
   const startedAt = Date.now();
   const result = await call(aliceAgent, "check_answers", { wait_seconds: 4 });
-  assert.deepEqual(result, { answers: [], still_pending: [question_id] });
+  assert.deepEqual(result, { answers: [], notices: [], still_pending: [question_id] });
   assert.ok(Date.now() - startedAt >= 4000);
 });
 
