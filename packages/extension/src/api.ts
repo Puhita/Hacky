@@ -6,7 +6,11 @@ import { redact } from "hacky-mcp-server/redact";
 const FEED_LIMIT = 30;
 const DECISION_LIMIT = 50;
 const TASK_LIMIT = 200;
-const LIVE_TABLES = ["events", "questions", "question_waiters", "decisions", "tasks", "assumptions"];
+const LIVE_TABLES = ["events", "questions", "question_waiters", "decisions", "tasks", "assumptions", "agent_sessions", "peer_questions"];
+const PEER_THREAD_LIMIT = 20;
+// Matches the MCP server: a chat that hasn't touched Hacky for this long counts as idle.
+const ACTIVE_WINDOW_MS = 10 * 60_000;
+const PULSE_LATEST = 3;
 
 // Where the confirmation email's link lands. It opens the user's editor, so nothing has to be
 // hosted. Each URL must be in the project's allowed redirects, see supabase/config.toml.
@@ -26,6 +30,26 @@ export type FeedItem = { id: string; summary: string; files: string[]; created_a
 export type PendingAssumption = { id: string; text: string; created_at: string; question: string; author: string };
 export type ActiveDecision = { id: string; text: string; created_at: string; question: string | null; author: string };
 export type BoardTask = { id: string; title: string; status: string; files: string[]; owner: string | null };
+// A question between two people's agents, seen from the signed-in person.
+export type PeerThread = {
+  id: string;
+  direction: "incoming" | "outgoing";
+  other: string;
+  question: string;
+  context: string | null;
+  answer: string | null;
+  answered_by_agent: boolean;
+  created_at: string;
+};
+// What a teammate's agents have been doing since a moment in time.
+export type PulseMember = {
+  name: string;
+  me: boolean;
+  chats: number;
+  focus: string[];
+  updates: number;
+  latest: string[];
+};
 
 function unwrap<T>({ data, error }: { data: T; error: { message: string } | null }): NonNullable<T> {
   if (error) throw new Error(error.message);
@@ -245,6 +269,86 @@ export class HackyApi {
 
   async addTask(teamId: string, title: string): Promise<void> {
     unwrap(await this.supabase.from("tasks").insert({ team_id: teamId, title: redact(title) }));
+  }
+
+  private async memberNames(teamId: string): Promise<Map<string, string>> {
+    const rows = unwrap(await this.supabase.from("members").select("user_id, display_name").eq("team_id", teamId));
+    return new Map(rows.map((row) => [row.user_id, row.display_name]));
+  }
+
+  // Questions between agents that involve this person, newest first.
+  async peerThreads(teamId: string): Promise<PeerThread[]> {
+    const user = await this.currentUser();
+    if (!user) return [];
+    const [names, rows] = await Promise.all([
+      this.memberNames(teamId),
+      this.supabase
+        .from("peer_questions")
+        .select("id, from_user, to_user, question, context, answer, answered_by_session, created_at")
+        .eq("team_id", teamId)
+        .order("created_at", { ascending: false })
+        .limit(PEER_THREAD_LIMIT)
+        .then(unwrap),
+    ]);
+    return rows.map((row) => {
+      const incoming = row.to_user === user.id;
+      return {
+        id: row.id,
+        direction: incoming ? "incoming" : "outgoing",
+        other: names.get(incoming ? row.from_user : row.to_user) ?? "A teammate",
+        question: row.question,
+        context: row.context,
+        answer: row.answer,
+        answered_by_agent: row.answered_by_session !== null,
+        created_at: row.created_at,
+      };
+    });
+  }
+
+  // The person answers for their agents, for example when none of them is running.
+  async answerPeerQuestion(questionId: string, text: string): Promise<void> {
+    unwrap(
+      await this.supabase.rpc("answer_peer_question", {
+        target_question: questionId,
+        answer_text: redact(text),
+        answering_session: null,
+      }),
+    );
+  }
+
+  // Who is doing what: live chats and their focus, and the progress logged since `since`.
+  async pulse(teamId: string, since: Date): Promise<PulseMember[]> {
+    const user = await this.currentUser();
+    const [names, events, sessions] = await Promise.all([
+      this.memberNames(teamId),
+      this.supabase
+        .from("events")
+        .select("user_id, summary, created_at")
+        .eq("team_id", teamId)
+        .gte("created_at", since.toISOString())
+        .order("created_at", { ascending: false })
+        .then(unwrap),
+      this.supabase
+        .from("agent_sessions")
+        .select("user_id, focus")
+        .eq("team_id", teamId)
+        .is("closed_at", null)
+        .gte("last_seen_at", new Date(Date.now() - ACTIVE_WINDOW_MS).toISOString())
+        .order("last_seen_at", { ascending: false })
+        .then(unwrap),
+    ]);
+    return [...names].map(([userId, name]) => {
+      const mine = events.filter((event) => event.user_id === userId);
+      const live = sessions.filter((session) => session.user_id === userId);
+      return {
+        name,
+        me: userId === user?.id,
+        chats: live.length,
+        focus: live.map((session) => session.focus).filter((focus): focus is string => Boolean(focus)),
+        updates: mine.length,
+        latest: mine.slice(0, PULSE_LATEST).map((event) => event.summary),
+      };
+    });
   }
 
   // Calls onChange whenever a teammate or agent changes anything the sidebar shows.

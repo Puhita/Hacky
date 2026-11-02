@@ -8,6 +8,7 @@ declare const __SUPABASE_URL__: string;
 declare const __SUPABASE_PUBLISHABLE_KEY__: string;
 
 const TEAM_KEY = "hacky.teamId";
+const DIGEST_KEY = "hacky.digestAt";
 
 class SidebarProvider implements vscode.WebviewViewProvider {
   constructor(
@@ -28,6 +29,14 @@ class SidebarProvider implements vscode.WebviewViewProvider {
       loadTeamId: () => this.context.workspaceState.get<string>(TEAM_KEY),
       saveTeamId: (teamId) => void this.context.workspaceState.update(TEAM_KEY, teamId),
       post: (state) => void view.webview.postMessage(state),
+      digestMinutes: () => vscode.workspace.getConfiguration("hacky").get<number>("progressDigestMinutes", 30),
+      loadDigestAt: () => this.context.workspaceState.get<number>(DIGEST_KEY),
+      saveDigestAt: (at) => void this.context.workspaceState.update(DIGEST_KEY, at),
+      notify: (message) => {
+        void vscode.window.showInformationMessage(message, "Open Hacky").then((choice) => {
+          if (choice) void vscode.commands.executeCommand("hacky.sidebar.focus");
+        });
+      },
     });
     view.webview.onDidReceiveMessage((message: Message) => void controller.handle(message));
     view.onDidDispose(() => controller.dispose());

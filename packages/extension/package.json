@@ -18,6 +18,17 @@
     "onUri"
   ],
   "contributes": {
+    "configuration": {
+      "title": "Hacky",
+      "properties": {
+        "hacky.progressDigestMinutes": {
+          "type": "number",
+          "default": 30,
+          "minimum": 0,
+          "description": "How often, in minutes, to show what your teammates' agents have got done. 0 turns it off."
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {

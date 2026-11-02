@@ -163,6 +163,63 @@
     ]);
   }
 
+  // Questions between agents. Open ones sent to this person can be answered here, for when
+  // none of their agents is running.
+  function renderThread(thread) {
+    const incoming = thread.direction === "incoming";
+    const open = thread.answer === null;
+    const who = incoming ? `${thread.other}'s agent asks` : `Your agent asked ${thread.other}`;
+    const answer = incoming && open ? draftArea(`peer-${thread.id}`, "Your answer") : null;
+    return el("article", { class: "card" }, [
+      el("p", { class: "muted", text: who }),
+      el("p", { class: "question", text: thread.question }),
+      thread.context ? el("p", { class: "muted", text: thread.context }) : null,
+      !open
+        ? el("p", { text: thread.answer })
+        : !incoming
+          ? el("p", { class: "muted", text: `Waiting for ${thread.other}.` })
+          : null,
+      !open ? el("p", { class: "muted", text: thread.answered_by_agent ? "Answered by their agent." : "Answered by a person." }) : null,
+      answer,
+      answer
+        ? el("button", {
+            type: "button",
+            class: "wide",
+            text: "Send answer to agent",
+            onclick: () => sendDraft(answer, (text) => ({ type: "answerTeammate", questionId: thread.id, text })),
+          })
+        : null,
+    ]);
+  }
+
+  function renderAgentChat(state) {
+    const waiting = state.agentChat.filter((thread) => thread.direction === "incoming" && thread.answer === null).length;
+    return section(`Agent questions (${waiting})`, [
+      state.agentChat.length === 0 ? el("p", { class: "muted", text: "No agent has asked another agent anything yet." }) : null,
+      ...state.agentChat.map(renderThread),
+    ]);
+  }
+
+  function renderPulseMember(member) {
+    const chats = member.chats === 1 ? "1 chat active" : `${member.chats} chats active`;
+    return el("article", { class: "feed-item" }, [
+      el("p", { text: member.me ? `${member.name} (you)` : member.name }),
+      el("p", { class: "muted", text: member.chats > 0 ? chats : "No chat active" }),
+      ...member.focus.map((focus) => el("p", { class: "muted", text: `Now: ${focus}` })),
+      member.updates > 0
+        ? el("p", { class: "muted", text: `${member.updates === 1 ? "1 update" : `${member.updates} updates`} in the last hour:` })
+        : null,
+      ...member.latest.map((summary) => el("p", { text: summary })),
+    ]);
+  }
+
+  function renderPulse(state) {
+    return section("Team pulse", [
+      state.pulse.length === 0 ? el("p", { class: "muted", text: "Nobody is on the team yet." }) : null,
+      ...state.pulse.map(renderPulseMember),
+    ]);
+  }
+
   function renderAssumption(assumption) {
     const reason = draftArea(`reason-${assumption.id}`, "Why it's wrong, or what to do instead");
     return el("article", { class: "card" }, [
@@ -280,6 +337,8 @@
       ]),
       renderWorkspace(state),
       renderInbox(state),
+      renderAgentChat(state),
+      renderPulse(state),
       renderAssumptions(state),
       renderDecisions(state),
       renderTasks(state),
