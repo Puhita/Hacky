@@ -37,6 +37,9 @@ Markdown files record what *already happened*. Nothing handles a **live, unresol
    - Questions are routed to the right human by task and file ownership.
    - One answer is saved as a decision and fanned out to all waiting agents.
 5. **Assumptions.** A blocked agent can declare an assumption and keep working. Humans confirm or reject it later. A rejection or changed decision notifies every agent that relied on it.
+6. **Several chats per account.** Every agent chat is its own session. Answers and notices are delivered to each chat separately, so one chat can't take what another was waiting for. A chat leaves a focus and handoff notes, and the person's next chat sees them in `get_context` and takes the work over with `resume_session`, including its open questions.
+7. **Progress updates.** Agents log progress with what they'll do next, and are reminded when they go quiet. Teammates see it live in the sidebar's team pulse, and the extension shows a digest of what teammates got done every 30 minutes (`hacky.progressDigestMinutes`, 0 turns it off).
+8. **Questions between agents.** When your task depends on work a teammate owns, your agent calls `ask_teammate`. The teammate's agent sees it on its next Hacky call, answers with `answer_teammate`, and the answer reaches your agent through `check_answers`. The teammate can also answer from the sidebar when none of their agents is running. These are not team decisions: only the two people see them.
 
 ## How it works
 
@@ -62,9 +65,17 @@ VS Code extension (sidebar UI) ---------------> Supabase (Postgres + Realtime + 
 | `search_decisions(query)` | Check for an existing answer before asking |
 | `ask(question, context, assumption?, task_id?, files?, confirmed_new?)` | Route the question and return a pending question id, or return similar questions for the agent to judge |
 | `join_question(question_id, assumption?)` | Wait on a teammate's identical question, or get its answer if it has one |
-| `check_answers(wait_seconds?)` | Answers for questions this agent is waiting on, and notices of rejected assumptions and changed decisions, optionally holding the call open until one arrives |
+| `check_answers(wait_seconds?)` | Answers for questions this agent is waiting on, notices of rejected assumptions and changed decisions, teammates' answers and questions for this agent, optionally holding the call open until one arrives |
+| `save_handoff(notes)` | Notes for whoever continues this chat's work |
+| `resume_session(session_id, takeover?)` | Take over the person's earlier chat: its waits, notices and notes. Refused while that chat looks active, unless the person confirms |
+| `ask_teammate(question, context, to? / task_id? / files?)` | Ask a teammate's agent directly, routed by name or by who owns the task or files |
+| `answer_teammate(question_id, answer)` | Answer a teammate agent's question. The first answer wins |
+
+`log_progress` also takes `next` and `task_id`. Anything that needs the agent's attention, such as a waiting teammate question or a long silence since the last `log_progress`, rides along on the next tool result as `heads_up`, because an MCP server can't wake an idle agent.
 
 MCP servers cannot wake an idle agent, and polling between steps isn't enough: in testing, agents gave up within seconds, long before a human could reply. So an agent whose work depends on the answer calls `check_answers` with `wait_seconds`, which holds the call open on the server until an answer arrives or the time runs out. Waiting uses no tokens, but the agent can't do anything else meanwhile. If the work doesn't depend on the answer, the agent proceeds on its declared assumption and checks between steps.
+
+Each chat is a session, and a session is one MCP server process. A chat counts as active for 10 minutes after its last Hacky call, and `resume_session` refuses an active chat unless the person confirms it has stopped. Closing a chat marks it ended when the editor closes the server's stdin. If the process is killed instead, the chat just goes idle after those 10 minutes.
 
 A rejected assumption notifies the agent that declared it and every other agent on the same question. A changed or withdrawn decision notifies the whole team, because every agent can read decisions, so there's no record of who relied on one. An agent that has already finished sees a notice only when its next session starts, so work it finished stays wrong until then.
 
@@ -75,14 +86,18 @@ A rejected assumption notifies the agent that declared it and every other agent 
 - `events` (auto-journal)
 - `decisions` (text, decided_by, status active/superseded, embedding)
 - `questions` (text, context, routed_to, status, embedding)
-- `question_waiters` (who is blocked on what)
+- `agent_sessions` (one per chat: focus, handoff notes, last seen, who took it over)
+- `question_waiters` (which chat is blocked on what)
+- `peer_questions` (a question from one agent to a teammate, and its answer)
 - `assumptions` (pending / confirmed / rejected)
-- `notices` (undelivered news of a rejected assumption or changed decision, one per person)
+- `notices` (news of a rejected assumption or changed decision, one per person) and `notice_deliveries` (which chat has been given which)
 
 ### Extension UI
 
 - **Setup:** log in, create or join a team with an invite code. One click writes `.mcp.json` and a managed block in `CLAUDE.md`.
 - **Inbox:** open questions, how many agents are waiting, context, one-click answer.
+- **Agent questions:** questions between agents that involve you. Ones sent to you can be answered here.
+- **Team pulse:** who has chats running, what each is doing, and the progress logged in the last hour. A notification shows what teammates got done at the chosen cadence, and when a teammate's agent asks you something.
 - **Task board** and **live feed**.
 - **Assumptions** panel to confirm or reject. Confirming answers the question with that assumption.
 - **Decisions** list to replace or withdraw an answer. Withdrawing puts its question back in the inbox.
@@ -106,6 +121,19 @@ A rejected assumption notifies the agent that declared it and every other agent 
 3. **Routing accuracy.** Wrong routing turns the inbox into spam. Route by explicit task owner, fall back to the team lead.
 4. **Bad answers broadcast.** One wrong answer reaches many agents. Show who will act on it and support retraction.
 5. **Secrets.** Never store keys or `.env` contents; filter before writing to the shared DB.
+6. **Chats and teammate questions.** An agent only sees a teammate's question on its next Hacky call, so the sidebar notification is the fallback for the human. A chat whose process is killed looks idle only after 10 minutes. The digest runs only once the sidebar has been opened in the session.
+
+## Upgrading to sessions and teammate questions
+
+The migration `20261102160000_sessions_and_teammate_questions.sql` drops the old `ask_question` and gives waits a session, so the database, the MCP server and the extension have to move together. Whoever owns the Supabase project (the `.env` with the project ref and database password) does this:
+
+1. **Review and merge** the branch with these changes.
+2. **Run the tests** with the real `.env`, since none of the new server tests have run against a live project: `npm test` in `packages/mcp-server` and `packages/extension`, and `node --env-file=.env --test supabase/tests/isolation.test.mjs`.
+3. **Publish the MCP server.** Bump the version in `packages/mcp-server/package.json` and publish `hacky-mcp-server`. The extension starts it with `npx -y hacky-mcp-server`, so teammates get the new version on their next chat.
+4. **Apply the migration** straight after step 3: `npx supabase db push`. Waits already in flight move to a closed session per person, which their next chat can take over. Between steps 3 and 4 agents on the old or new server see errors on `ask`.
+5. **Package and share the extension:** `npm run package` in `packages/extension`, then everyone installs the new `.vsix`.
+6. **Each teammate clicks "Connect this folder"** once. That refreshes the managed block in `CLAUDE.md`, which is where agents learn about `resume_session`, `ask_teammate` and `save_handoff`.
+7. **Everyone starts new Claude Code chats.** Running chats keep the old server.
 
 ## Success metric
 

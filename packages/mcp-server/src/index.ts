@@ -20,4 +20,14 @@ const supabase = createClient(HACKY_SUPABASE_URL, HACKY_SUPABASE_PUBLISHABLE_KEY
   },
 });
 
-await createServer(supabase, HACKY_TEAM_ID).connect(new StdioServerTransport());
+const reminderSeconds = Number(process.env.HACKY_PROGRESS_REMINDER_SECONDS);
+const { server, endSession } = createServer(supabase, HACKY_TEAM_ID, {
+  ...(reminderSeconds > 0 && { progressReminderMs: reminderSeconds * 1000 }),
+});
+await server.connect(new StdioServerTransport());
+
+// Claude Code ends a chat by closing the server's stdin. Marking the session closed lets the
+// person's next chat take it over without waiting for it to look idle.
+process.stdin.once("end", () => {
+  void endSession().finally(() => process.exit(0));
+});

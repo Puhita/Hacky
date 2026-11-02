@@ -33,6 +33,8 @@ const SIGNED_OUT = {
   decisions: [],
   tasks: [],
   feed: [],
+  pulse: [],
+  agentChat: [],
   notice: null,
   error: null,
 };
@@ -222,4 +224,57 @@ test("the feed shows who did what", () => {
   assert.match(root.textContent, /Fixed average/);
   assert.match(root.textContent, /Bob/);
   assert.match(root.textContent, /src\/math\.js/);
+});
+
+const INCOMING = {
+  id: "p1",
+  direction: "incoming",
+  other: "Orlin",
+  question: "Which fields does /users return?",
+  context: "Building the profile page",
+  answer: null,
+  answered_by_agent: false,
+  created_at: "2026-11-02T10:00:00Z",
+};
+
+test("a teammate's agent question can be answered from the sidebar, and answered ones are read-only", () => {
+  const { sent, send, root, button } = mount();
+  send({
+    ...IN_TEAM,
+    agentChat: [
+      INCOMING,
+      { ...INCOMING, id: "p2", direction: "outgoing", question: "Is the DB seeded?", answer: "Yes", answered_by_agent: true },
+      { ...INCOMING, id: "p3", direction: "outgoing", question: "Who owns auth?" },
+    ],
+  });
+  assert.match(root.textContent, /Agent questions \(1\)/);
+  assert.match(root.textContent, /Orlin's agent asks/);
+  assert.match(root.textContent, /Which fields does \/users return\?/);
+  assert.match(root.textContent, /Your agent asked Orlin/);
+  assert.match(root.textContent, /Answered by their agent\./);
+  assert.match(root.textContent, /Waiting for Orlin\./);
+  assert.equal(root.querySelectorAll("textarea").length, 1, "only the open question sent to this person has an answer box");
+
+  button("Send answer to agent").click();
+  assert.equal(sent.length, 1, "an empty answer isn't sent");
+  root.querySelector("#peer-p1").value = "id, name, email";
+  button("Send answer to agent").click();
+  assert.deepEqual(sent[1], { type: "answerTeammate", questionId: "p1", text: "id, name, email" });
+});
+
+test("the team pulse shows live chats, what they are doing, and recent progress", () => {
+  const { send, root } = mount();
+  send({
+    ...IN_TEAM,
+    pulse: [
+      { name: "Alice", me: true, chats: 2, focus: ["Login form"], updates: 0, latest: [] },
+      { name: "Orlin", me: false, chats: 0, focus: [], updates: 3, latest: ["Finished the users API"] },
+    ],
+  });
+  assert.match(root.textContent, /Alice \(you\)/);
+  assert.match(root.textContent, /2 chats active/);
+  assert.match(root.textContent, /Now: Login form/);
+  assert.match(root.textContent, /No chat active/);
+  assert.match(root.textContent, /3 updates in the last hour/);
+  assert.match(root.textContent, /Finished the users API/);
 });
