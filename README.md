@@ -62,9 +62,11 @@ VS Code extension (sidebar UI) ---------------> Supabase (Postgres + Realtime + 
 | `search_decisions(query)` | Check for an existing answer before asking |
 | `ask(question, context, assumption?, task_id?, files?, confirmed_new?)` | Route the question and return a pending question id, or return similar questions for the agent to judge |
 | `join_question(question_id, assumption?)` | Wait on a teammate's identical question, or get its answer if it has one |
-| `check_answers(wait_seconds?)` | Answers and retractions for questions this agent is waiting on, optionally holding the call open until one arrives |
+| `check_answers(wait_seconds?)` | Answers for questions this agent is waiting on, and notices of rejected assumptions and changed decisions, optionally holding the call open until one arrives |
 
 MCP servers cannot wake an idle agent, and polling between steps isn't enough: in testing, agents gave up within seconds, long before a human could reply. So an agent whose work depends on the answer calls `check_answers` with `wait_seconds`, which holds the call open on the server until an answer arrives or the time runs out. Waiting uses no tokens, but the agent can't do anything else meanwhile. If the work doesn't depend on the answer, the agent proceeds on its declared assumption and checks between steps.
+
+A rejected assumption notifies the agent that declared it and every other agent on the same question. A changed or withdrawn decision notifies the whole team, because every agent can read decisions, so there's no record of who relied on one. An agent that has already finished sees a notice only when its next session starts, so work it finished stays wrong until then.
 
 ### Data model
 
@@ -75,13 +77,15 @@ MCP servers cannot wake an idle agent, and polling between steps isn't enough: i
 - `questions` (text, context, routed_to, status, embedding)
 - `question_waiters` (who is blocked on what)
 - `assumptions` (pending / confirmed / rejected)
+- `notices` (undelivered news of a rejected assumption or changed decision, one per person)
 
 ### Extension UI
 
 - **Setup:** log in, create or join a team with an invite code. One click writes `.mcp.json` and a managed block in `CLAUDE.md`.
 - **Inbox:** open questions, how many agents are waiting, context, one-click answer.
 - **Task board** and **live feed**.
-- **Assumptions** panel to confirm or reject.
+- **Assumptions** panel to confirm or reject. Confirming answers the question with that assumption.
+- **Decisions** list to replace or withdraw an answer. Withdrawing puts its question back in the inbox.
 
 `CLAUDE.md` is not eliminated: it keeps a short, extension-managed block that tells agents to use the Hacky tools instead of asking their own human.
 
@@ -109,4 +113,4 @@ Minutes per hackathon lost to coordination (copy-pasting, duplicate work, confli
 
 ## License
 
-TBD
+[MIT](LICENSE)

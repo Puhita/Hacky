@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { defaultCredentialsFile } from "hacky-mcp-server/credentials";
 import * as vscode from "vscode";
-import { HackyApi } from "./api.js";
+import { confirmationUrl, HackyApi } from "./api.js";
 import { SidebarController, type Message } from "./controller.js";
 
 declare const __SUPABASE_URL__: string;
@@ -53,9 +53,21 @@ class SidebarProvider implements vscode.WebviewViewProvider {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  const api = new HackyApi(__SUPABASE_URL__, __SUPABASE_PUBLISHABLE_KEY__, defaultCredentialsFile());
+  const api = new HackyApi(
+    __SUPABASE_URL__,
+    __SUPABASE_PUBLISHABLE_KEY__,
+    defaultCredentialsFile(),
+    confirmationUrl(vscode.env.uriScheme),
+  );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("hacky.sidebar", new SidebarProvider(context, api)),
+    // The link's fragment holds login tokens. They're deliberately ignored: the user logs in as usual.
+    vscode.window.registerUriHandler({
+      handleUri: () => {
+        void vscode.commands.executeCommand("hacky.sidebar.focus");
+        void vscode.window.showInformationMessage("Your email is confirmed. Log in to Hacky in the sidebar.");
+      },
+    }),
     { dispose: () => void api.dispose() },
   );
 }

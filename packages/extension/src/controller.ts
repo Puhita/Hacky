@@ -1,6 +1,6 @@
 // Sidebar behaviour with no VS Code dependency: turns webview messages into API calls
 // and publishes the state the webview renders.
-import type { FeedItem, HackyApi, InboxQuestion, Team } from "./api.js";
+import type { ActiveDecision, BoardTask, FeedItem, HackyApi, InboxQuestion, PendingAssumption, Team } from "./api.js";
 import { connectedTeamId, connectWorkspace } from "./setup.js";
 
 const REFRESH_DEBOUNCE_MS = 300;
@@ -15,6 +15,9 @@ export type SidebarState = {
   team: Team | null;
   workspace: WorkspaceStatus;
   inbox: InboxQuestion[];
+  assumptions: PendingAssumption[];
+  decisions: ActiveDecision[];
+  tasks: BoardTask[];
   feed: FeedItem[];
   notice: string | null;
   error: string | null;
@@ -29,7 +32,12 @@ export type Message =
   | { type: "joinTeam"; code: string; displayName: string }
   | { type: "selectTeam"; teamId: string }
   | { type: "connectWorkspace" }
-  | { type: "answer"; questionId: string; text: string };
+  | { type: "answer"; questionId: string; text: string }
+  | { type: "confirmAssumption"; assumptionId: string }
+  | { type: "rejectAssumption"; assumptionId: string; reason: string }
+  | { type: "changeDecision"; decisionId: string; text: string }
+  | { type: "withdrawDecision"; decisionId: string }
+  | { type: "addTask"; title: string };
 
 export type ControllerOptions = {
   api: HackyApi;
@@ -82,7 +90,7 @@ export class SidebarController {
         return api.signIn(message.email.trim(), message.password);
       case "signUp":
         if (!(await api.signUp(message.email.trim(), message.password))) {
-          this.notice = "Check your email to confirm your account, then log in.";
+          this.notice = "Check your email and open the link to confirm your account. It brings you back here to log in.";
         }
         return;
       case "signOut":
@@ -104,6 +112,25 @@ export class SidebarController {
         await api.answer(message.questionId, message.text.trim());
         this.notice = "Answer sent to the waiting agents.";
         return;
+      case "confirmAssumption":
+        await api.confirmAssumption(message.assumptionId);
+        this.notice = "Confirmed. Agents waiting on this question get it as the answer.";
+        return;
+      case "rejectAssumption":
+        await api.rejectAssumption(message.assumptionId, message.reason.trim());
+        this.notice = "Rejected. The agents on this question will be told.";
+        return;
+      case "changeDecision":
+        await api.changeDecision(message.decisionId, message.text.trim());
+        this.notice = "Decision changed. Every agent on the team will be told.";
+        return;
+      case "withdrawDecision":
+        await api.withdrawDecision(message.decisionId);
+        this.notice = "Decision withdrawn. Every agent on the team will be told, and its question is back in the inbox.";
+        return;
+      case "addTask":
+        if (!this.teamId) throw new Error("Choose a team first.");
+        return api.addTask(this.teamId, message.title.trim());
     }
   }
 
@@ -154,6 +181,9 @@ export class SidebarController {
       team: null,
       workspace: "none",
       inbox: [],
+      assumptions: [],
+      decisions: [],
+      tasks: [],
       feed: [],
       notice: this.notice,
       error: this.error,
@@ -169,7 +199,13 @@ export class SidebarController {
         if (state.team && state.team.id !== this.teamId) this.setTeam(state.team.id);
         if (state.team) {
           state.workspace = this.workspaceStatus(state.team);
-          [state.inbox, state.feed] = await Promise.all([api.inbox(state.team.id), api.feed(state.team.id)]);
+          [state.inbox, state.assumptions, state.decisions, state.tasks, state.feed] = await Promise.all([
+            api.inbox(state.team.id),
+            api.assumptions(state.team.id),
+            api.decisions(state.team.id),
+            api.tasks(state.team.id),
+            api.feed(state.team.id),
+          ]);
         }
       }
       this.syncSubscription(state.team?.id);

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { createClient } from "@supabase/supabase-js";
-import { HackyApi } from "./api.js";
+import { confirmationUrl, HackyApi } from "./api.js";
 import { SidebarController, type SidebarState } from "./controller.js";
 
 const { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY } = process.env as Record<string, string>;
@@ -196,6 +196,120 @@ test("someone outside the team can't answer its questions or see them", async ()
   const { data: stored } = await admin.from("questions").select("status").eq("id", question!.id).single();
   assert.equal(stored!.status, "open");
   assert.deepEqual(await outsider.api.inbox(teamId), []);
+});
+
+async function questionWithAssumption(teamId: string, text: string, assumption: string) {
+  const { data: asker } = await admin.from("members").select("user_id").eq("team_id", teamId).eq("role", "member").single();
+  const { data: question } = await admin
+    .from("questions")
+    .insert({ team_id: teamId, text, asked_by: asker!.user_id })
+    .select("id")
+    .single();
+  await admin.from("question_waiters").insert({ team_id: teamId, question_id: question!.id, user_id: asker!.user_id });
+  await admin.from("assumptions").insert({ team_id: teamId, question_id: question!.id, user_id: asker!.user_id, text: assumption });
+  return { questionId: question!.id as string, userId: asker!.user_id as string };
+}
+
+test("rejecting an assumption removes it from the panel, tells the agent, and filters secrets", async () => {
+  const teamId = alice.last().team!.id;
+  const { questionId, userId } = await questionWithAssumption(teamId, "Which plan?", "Pro plan");
+  await alice.controller.refresh();
+  const assumption = alice.last().assumptions.find((item) => item.text === "Pro plan")!;
+  assert.equal(assumption.question, "Which plan?");
+  assert.equal(assumption.author, "Bob");
+
+  await alice.controller.handle({
+    type: "rejectAssumption",
+    assumptionId: assumption.id,
+    reason: "Free plan. API_KEY=sb_secret_abcdefghijklmnop123456",
+  });
+  assert.equal(alice.last().error, null);
+  assert.ok(!alice.last().assumptions.some((item) => item.id === assumption.id));
+  assert.ok(alice.last().inbox.some((item) => item.id === questionId), "the question is still open");
+  const { data: notices } = await admin.from("notices").select("kind, text").eq("question_id", questionId).eq("user_id", userId);
+  assert.deepEqual(notices, [{ kind: "assumption_rejected", text: "Free plan. API_KEY=[REDACTED]" }]);
+});
+
+test("confirming an assumption turns it into a searchable decision", async () => {
+  const teamId = alice.last().team!.id;
+  const { questionId } = await questionWithAssumption(teamId, "Which region?", "EU only");
+  await alice.controller.refresh();
+  const assumption = alice.last().assumptions.find((item) => item.text === "EU only")!;
+  await alice.controller.handle({ type: "confirmAssumption", assumptionId: assumption.id });
+  assert.equal(alice.last().error, null);
+  assert.ok(!alice.last().inbox.some((item) => item.id === questionId));
+  assert.ok(!alice.last().assumptions.some((item) => item.id === assumption.id));
+  const decision = alice.last().decisions.find((item) => item.text === "EU only")!;
+  assert.equal(decision.question, "Which region?");
+  assert.equal(decision.author, "Alice");
+  const { data } = await admin.from("decisions").select("embedding").eq("id", decision.id).single();
+  assert.ok(data!.embedding);
+});
+
+test("an assumption on an answered question leaves the panel", async () => {
+  const teamId = alice.last().team!.id;
+  const { questionId } = await questionWithAssumption(teamId, "Which font?", "Inter");
+  await alice.controller.handle({ type: "answer", questionId, text: "Roboto" });
+  assert.ok(!alice.last().assumptions.some((item) => item.text === "Inter"));
+});
+
+test("changing and withdrawing a decision update the list and notify the team", async () => {
+  const teamId = alice.last().team!.id;
+  const { questionId } = await questionWithAssumption(teamId, "Which colour scheme?", "Dark");
+  await alice.controller.handle({ type: "answer", questionId, text: "Light" });
+  const first = alice.last().decisions.find((item) => item.text === "Light")!;
+
+  await alice.controller.handle({ type: "changeDecision", decisionId: first.id, text: "Sepia. API_KEY=sb_secret_abcdefghijklmnop123456" });
+  assert.equal(alice.last().error, null);
+  const second = alice.last().decisions.find((item) => item.text === "Sepia. API_KEY=[REDACTED]")!;
+  assert.ok(!alice.last().decisions.some((item) => item.id === first.id));
+  const { data: embedded } = await admin.from("decisions").select("embedding").eq("id", second.id).single();
+  assert.ok(embedded!.embedding, "the replacement is searchable");
+
+  await alice.controller.handle({ type: "withdrawDecision", decisionId: second.id });
+  assert.equal(alice.last().error, null);
+  assert.ok(!alice.last().decisions.some((item) => item.id === second.id));
+  assert.ok(alice.last().inbox.some((item) => item.id === questionId), "the question is back in the inbox");
+
+  const { data: notices } = await admin.from("notices").select("kind").eq("question_id", questionId);
+  const kinds = notices!.map((notice) => notice.kind);
+  assert.equal(kinds.filter((kind) => kind === "decision_changed").length, 2, "both members");
+  assert.equal(kinds.filter((kind) => kind === "decision_withdrawn").length, 2, "both members");
+});
+
+test("the task board shows owners and status, and a task can be added", async () => {
+  const teamId = alice.last().team!.id;
+  await alice.controller.handle({ type: "addTask", title: "Write docs. API_KEY=sb_secret_abcdefghijklmnop123456" });
+  assert.equal(alice.last().error, null);
+  const added = alice.last().tasks.find((task) => task.title.startsWith("Write docs"))!;
+  assert.equal(added.title, "Write docs. API_KEY=[REDACTED]");
+  assert.equal(added.status, "todo");
+  assert.equal(added.owner, null);
+
+  const { data: member } = await admin.from("members").select("user_id").eq("team_id", teamId).eq("role", "member").single();
+  await admin.from("tasks").update({ owner_id: member!.user_id, status: "in_progress", files: ["docs.md"] }).eq("id", added.id);
+  await alice.controller.refresh();
+  const claimed = alice.last().tasks.find((task) => task.id === added.id)!;
+  assert.equal(claimed.owner, "Bob");
+  assert.equal(claimed.status, "in_progress");
+  assert.deepEqual(claimed.files, ["docs.md"]);
+});
+
+test("the confirmation link goes back to the editor, for each editor the project allows", async () => {
+  for (const scheme of ["vscode", "vscode-insiders"]) {
+    const email = `hacky-test-link-${randomBytes(6).toString("hex")}@example.com`;
+    const { data, error } = await admin.auth.admin.generateLink({
+      type: "signup",
+      email,
+      password: randomBytes(24).toString("hex"),
+      options: { redirectTo: confirmationUrl(scheme) },
+    });
+    assert.ifError(error);
+    userIds.push(data.user!.id);
+    const response = await fetch(data.properties!.action_link, { redirect: "manual" });
+    const location = response.headers.get("location") ?? "";
+    assert.ok(location.startsWith(`${scheme}://hacky.hacky/confirmed`), `redirected to ${location.split("#")[0]}`);
+  }
 });
 
 test("logging out returns to the login screen", async () => {

@@ -124,11 +124,23 @@
     ]);
   }
 
+  // A text box that survives re-renders, which happen whenever anything changes for the team.
+  function draftArea(id, label) {
+    const area = el("textarea", { "aria-label": label, placeholder: label, rows: "2", id });
+    area.value = drafts.get(id) ?? "";
+    area.oninput = () => drafts.set(id, area.value);
+    return area;
+  }
+
+  function sendDraft(area, buildMessage) {
+    if (area.value.trim() === "") return;
+    drafts.delete(area.id);
+    vscode.postMessage(buildMessage(area.value));
+  }
+
   function renderQuestion(question) {
     const waiting = question.waiting === 1 ? "1 agent waiting" : `${question.waiting} agents waiting`;
-    const answer = el("textarea", { "aria-label": "Your answer", placeholder: "Your answer", rows: "3", id: `answer-${question.id}` });
-    answer.value = drafts.get(question.id) ?? "";
-    answer.oninput = () => drafts.set(question.id, answer.value);
+    const answer = draftArea(`answer-${question.id}`, "Your answer");
     return el("article", { class: "card" }, [
       question.routed_to_me ? el("span", { class: "badge", text: "For you" }) : null,
       el("p", { class: "question", text: question.text }),
@@ -139,11 +151,7 @@
         type: "button",
         class: "wide",
         text: "Send answer",
-        onclick: () => {
-          if (answer.value.trim() === "") return;
-          drafts.delete(question.id);
-          vscode.postMessage({ type: "answer", questionId: question.id, text: answer.value });
-        },
+        onclick: () => sendDraft(answer, (text) => ({ type: "answer", questionId: question.id, text })),
       }),
     ]);
   }
@@ -152,6 +160,94 @@
     return section(`Inbox (${state.inbox.length})`, [
       state.inbox.length === 0 ? el("p", { class: "muted", text: "No open questions." }) : null,
       ...state.inbox.map(renderQuestion),
+    ]);
+  }
+
+  function renderAssumption(assumption) {
+    const reason = draftArea(`reason-${assumption.id}`, "Why it's wrong, or what to do instead");
+    return el("article", { class: "card" }, [
+      el("p", { class: "question", text: assumption.text }),
+      el("p", { class: "muted", text: `Assumed by ${assumption.author}, for: ${assumption.question}` }),
+      el("button", {
+        type: "button",
+        text: "Confirm",
+        onclick: () => vscode.postMessage({ type: "confirmAssumption", assumptionId: assumption.id }),
+      }),
+      reason,
+      el("button", {
+        type: "button",
+        class: "secondary",
+        text: "Reject",
+        onclick: () => sendDraft(reason, (text) => ({ type: "rejectAssumption", assumptionId: assumption.id, reason: text })),
+      }),
+    ]);
+  }
+
+  function renderAssumptions(state) {
+    return section(`Assumptions (${state.assumptions.length})`, [
+      state.assumptions.length === 0 ? el("p", { class: "muted", text: "No agent is working on an assumption." }) : null,
+      ...state.assumptions.map(renderAssumption),
+    ]);
+  }
+
+  function renderDecision(decision) {
+    const replacement = draftArea(`decision-${decision.id}`, "The new decision");
+    const actions = el("details", {}, [
+      el("summary", { text: "Change or withdraw" }),
+      el("p", { class: "muted", text: "Either one tells every agent on the team." }),
+      replacement,
+      el("button", {
+        type: "button",
+        text: "Replace",
+        onclick: () => sendDraft(replacement, (text) => ({ type: "changeDecision", decisionId: decision.id, text })),
+      }),
+      el("button", {
+        type: "button",
+        class: "secondary",
+        text: "Withdraw",
+        onclick: () => vscode.postMessage({ type: "withdrawDecision", decisionId: decision.id }),
+      }),
+    ]);
+    actions.open = openDecisions.has(decision.id);
+    actions.ontoggle = () => (actions.open ? openDecisions.add(decision.id) : openDecisions.delete(decision.id));
+    return el("article", { class: "card" }, [
+      el("p", { class: "question", text: decision.text }),
+      decision.question ? el("p", { class: "muted", text: decision.question }) : null,
+      el("p", { class: "muted", text: `Decided by ${decision.author}.` }),
+      actions,
+    ]);
+  }
+
+  function renderDecisions(state) {
+    return section(`Decisions (${state.decisions.length})`, [
+      state.decisions.length === 0 ? el("p", { class: "muted", text: "No decisions yet." }) : null,
+      ...state.decisions.map(renderDecision),
+    ]);
+  }
+
+  const TASK_COLUMNS = [
+    ["todo", "To do"],
+    ["in_progress", "In progress"],
+    ["done", "Done"],
+  ];
+
+  function renderTasks(state) {
+    return section("Task board", [
+      ...TASK_COLUMNS.map(([status, title]) => {
+        const tasks = state.tasks.filter((task) => task.status === status);
+        return el("div", { class: "task-column" }, [
+          el("h3", { text: `${title} (${tasks.length})` }),
+          ...tasks.map((task) =>
+            el("article", { class: "feed-item" }, [
+              el("p", { text: task.title }),
+              task.owner || task.files.length > 0
+                ? el("p", { class: "muted", text: [task.owner, task.files.join(", ")].filter(Boolean).join(" · ") })
+                : null,
+            ]),
+          ),
+        ]);
+      }),
+      form([{ name: "title", label: "New task" }], [{ label: "Add task", secondary: true, send: (values) => ({ type: "addTask", ...values }) }]),
     ]);
   }
 
@@ -184,6 +280,9 @@
       ]),
       renderWorkspace(state),
       renderInbox(state),
+      renderAssumptions(state),
+      renderDecisions(state),
+      renderTasks(state),
       renderFeed(state),
     ]);
   }
@@ -201,6 +300,7 @@
   }
 
   const drafts = new Map();
+  const openDecisions = new Set();
 
   // A background refresh must not wipe out what the user is typing, so plain re-renders
   // leave form fields alone while one of them has focus.
@@ -210,8 +310,8 @@
   }
 
   function render(state) {
-    const focusedAnswer = document.activeElement?.id?.startsWith("answer-") ? document.activeElement.id : null;
-    const caret = focusedAnswer ? document.activeElement.selectionStart : 0;
+    const focusedDraft = document.activeElement?.tagName === "TEXTAREA" ? document.activeElement.id : null;
+    const caret = focusedDraft ? document.activeElement.selectionStart : 0;
     root.replaceChildren(
       ...[
         state.error ? el("p", { class: "error", role: "alert", text: state.error }) : null,
@@ -220,8 +320,8 @@
         state.user ? renderAccount(state) : null,
       ].filter(Boolean),
     );
-    if (focusedAnswer) {
-      const restored = document.getElementById(focusedAnswer);
+    if (focusedDraft) {
+      const restored = document.getElementById(focusedDraft);
       if (restored) {
         restored.focus();
         restored.setSelectionRange(caret, caret);

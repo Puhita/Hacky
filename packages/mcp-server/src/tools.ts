@@ -33,6 +33,23 @@ type WaiterRow = {
   questions: { text: string; status: string; decisions: { text: string } | null };
 };
 
+type NoticeRow = {
+  id: string;
+  kind: "assumption_rejected" | "decision_changed" | "decision_withdrawn";
+  about: string;
+  text: string | null;
+  questions: { text: string } | null;
+};
+
+const NOTICE_MESSAGES: Record<NoticeRow["kind"], (notice: NoticeRow) => string> = {
+  assumption_rejected: ({ about, text }) =>
+    `A human rejected the assumption "${about}". Reason: ${text}. Change anything you built on it. The question is still open, so its answer can still come through check_answers.`,
+  decision_changed: ({ about, text }) =>
+    `A human changed a team decision. It was "${about}" and it is now "${text}". Change anything you built on the old decision.`,
+  decision_withdrawn: ({ about }) =>
+    `A human withdrew the team decision "${about}". Stop relying on it and change anything you built on it. If you still need an answer, call ask.`,
+};
+
 export function createServer(supabase: SupabaseClient, teamId: string): McpServer {
   const server = new McpServer({ name: "hacky", version: "0.0.0" });
   let verifiedUserId: string | undefined;
@@ -60,6 +77,18 @@ export function createServer(supabase: SupabaseClient, teamId: string): McpServe
         .eq("user_id", userId),
     );
     return rows as unknown as WaiterRow[];
+  }
+
+  async function readNotices(userId: string): Promise<NoticeRow[]> {
+    const rows = unwrap(
+      await supabase
+        .from("notices")
+        .select("id, kind, about, text, questions(text)")
+        .eq("team_id", teamId)
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true }),
+    );
+    return rows as unknown as NoticeRow[];
   }
 
   async function embed(text: string): Promise<string | null> {
@@ -92,11 +121,11 @@ export function createServer(supabase: SupabaseClient, teamId: string): McpServe
 
   tool(
     "get_context",
-    "Call at the start of a session. Returns your tasks, unclaimed tasks, active team decisions, what teammates did recently, and the questions you are waiting on.",
+    "Call at the start of a session. Returns your tasks, unclaimed tasks, active team decisions, what teammates did recently, the questions you are waiting on, and how many notices are ready for check_answers.",
     {},
     async () => {
       const userId = await currentUserId();
-      const [tasks, decisions, events, waiters] = await Promise.all([
+      const [tasks, decisions, events, waiters, notices] = await Promise.all([
         supabase.from("tasks").select("id, title, status, files, owner_id").eq("team_id", teamId).neq("status", "done"),
         supabase
           .from("decisions")
@@ -113,6 +142,7 @@ export function createServer(supabase: SupabaseClient, teamId: string): McpServe
           .order("created_at", { ascending: false })
           .limit(RECENT_EVENTS),
         readWaiters(userId),
+        readNotices(userId),
       ]);
       const openTasks = unwrapRequired(tasks);
       return {
@@ -125,6 +155,7 @@ export function createServer(supabase: SupabaseClient, teamId: string): McpServe
           question: waiter.questions.text,
           answer_ready: isAnswered(waiter),
         })),
+        notices_ready: notices.length,
       };
     },
   );
@@ -149,9 +180,27 @@ export function createServer(supabase: SupabaseClient, teamId: string): McpServe
     },
   );
 
+  async function overlappingTasks(userId: string, files: string[]) {
+    if (files.length === 0) return [];
+    const rows = unwrap(
+      await supabase
+        .from("tasks")
+        .select("title, files, members(display_name)")
+        .eq("team_id", teamId)
+        .eq("status", "in_progress")
+        .neq("owner_id", userId)
+        .overlaps("files", files),
+    ) as unknown as { title: string; files: string[]; members: { display_name: string } | null }[];
+    return rows.map((row) => ({
+      title: row.title,
+      owner: row.members?.display_name,
+      shared_files: row.files.filter((file) => files.includes(file)),
+    }));
+  }
+
   tool(
     "claim_task",
-    "Take an unclaimed task so no teammate duplicates the work. Check the result: if claimed is false, a teammate already owns it, so don't work on it.",
+    "Take an unclaimed task so no teammate duplicates the work. Check the result: if claimed is false, a teammate already owns it, so don't work on it. If it lists overlapping_tasks, a teammate is working on the same files, so keep your changes to them small and tell your human.",
     { task_id: z.string().uuid().describe("A task id from get_context") },
     async ({ task_id }) => {
       const userId = await currentUserId();
@@ -166,7 +215,10 @@ export function createServer(supabase: SupabaseClient, teamId: string): McpServe
           .select("id, title, status, files")
           .maybeSingle(),
       );
-      if (claimed) return { claimed: true, task: claimed };
+      if (claimed) {
+        const overlapping = await overlappingTasks(userId, claimed.files);
+        return { claimed: true, task: claimed, ...(overlapping.length > 0 && { overlapping_tasks: overlapping }) };
+      }
 
       const existing = unwrap(
         await supabase
@@ -386,34 +438,54 @@ export function createServer(supabase: SupabaseClient, teamId: string): McpServe
 
   tool(
     "check_answers",
-    "Get answers to the questions you asked with ask, and list the ones still pending. Each answer is returned once. Pass wait_seconds to hold the call open until an answer arrives or the time runs out. Waiting uses no tokens, but you can't do anything else meanwhile, so only wait when your work depends on the answer.",
+    "Get answers to the questions you asked with ask, list the ones still pending, and get notices that a human rejected an assumption or changed a decision. Each answer and notice is returned once. A notice overrides your earlier work. If an answer differs from your_assumption, change what you built on the assumption. Pass wait_seconds to hold the call open until an answer or notice arrives or the time runs out. Waiting uses no tokens, but you can't do anything else meanwhile, so only wait when your work depends on the answer.",
     {
       wait_seconds: z.number().int().min(0).max(MAX_WAIT_SECONDS).optional().describe("How long to wait for an answer"),
     },
     async ({ wait_seconds = 0 }, signal) => {
       const userId = await currentUserId();
       const deadline = Date.now() + wait_seconds * 1000;
-      let waiters = await readWaiters(userId);
-      while (waiters.length > 0 && !waiters.some(isAnswered) && Date.now() < deadline && !signal.aborted) {
+      let [waiters, notices] = await Promise.all([readWaiters(userId), readNotices(userId)]);
+      while (
+        notices.length === 0 &&
+        waiters.length > 0 &&
+        !waiters.some(isAnswered) &&
+        Date.now() < deadline &&
+        !signal.aborted
+      ) {
         await sleep(POLL_INTERVAL_MS, undefined, { signal }).catch(() => {});
-        if (!signal.aborted) waiters = await readWaiters(userId);
+        if (!signal.aborted) [waiters, notices] = await Promise.all([readWaiters(userId), readNotices(userId)]);
       }
 
       const answered = waiters.filter(isAnswered);
+      const assumed = new Map<string, string>();
       if (answered.length > 0) {
-        unwrap(
+        const questionIds = answered.map((waiter) => waiter.question_id);
+        const assumptions = unwrapRequired(
           await supabase
-            .from("question_waiters")
-            .delete()
+            .from("assumptions")
+            .select("question_id, text")
             .eq("user_id", userId)
-            .in("question_id", answered.map((waiter) => waiter.question_id)),
+            .neq("status", "rejected")
+            .in("question_id", questionIds),
         );
+        for (const assumption of assumptions) assumed.set(assumption.question_id, assumption.text);
+        unwrap(await supabase.from("question_waiters").delete().eq("user_id", userId).in("question_id", questionIds));
+      }
+      if (notices.length > 0) {
+        unwrap(await supabase.from("notices").delete().in("id", notices.map((notice) => notice.id)));
       }
       return {
         answers: answered.map((waiter) => ({
           question_id: waiter.question_id,
           question: waiter.questions.text,
           answer: waiter.questions.decisions?.text,
+          ...(assumed.has(waiter.question_id) && { your_assumption: assumed.get(waiter.question_id) }),
+        })),
+        notices: notices.map((notice) => ({
+          kind: notice.kind,
+          question: notice.questions?.text,
+          message: NOTICE_MESSAGES[notice.kind](notice),
         })),
         still_pending: waiters.filter((waiter) => !isAnswered(waiter)).map((waiter) => waiter.question_id),
       };

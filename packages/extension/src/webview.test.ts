@@ -23,7 +23,21 @@ function mount() {
   return { sent, send, window, root, button };
 }
 
-const SIGNED_OUT = { user: null, teams: [], team: null, workspace: "none", inbox: [], feed: [], notice: null, error: null };
+const SIGNED_OUT = {
+  user: null,
+  teams: [],
+  team: null,
+  workspace: "none",
+  inbox: [],
+  assumptions: [],
+  decisions: [],
+  tasks: [],
+  feed: [],
+  notice: null,
+  error: null,
+};
+const ASSUMPTION = { id: "a1", text: "10% off", created_at: "2026-11-02T10:00:00Z", question: "What discount?", author: "Bob" };
+const DECISION = { id: "d1", text: "17% off", created_at: "2026-11-02T10:00:00Z", question: "What discount?", author: "Alice" };
 const TEAM = { id: "t1", name: "Team One", invite_code: "abc123", role: "lead" };
 const QUESTION = {
   id: "q1",
@@ -85,6 +99,9 @@ test("teammate and agent text can't inject HTML", () => {
     ...IN_TEAM,
     team: { ...TEAM, name: attack },
     inbox: [{ ...QUESTION, text: attack, context: attack, asked_by_name: attack }],
+    assumptions: [{ ...ASSUMPTION, text: attack, question: attack, author: attack }],
+    decisions: [{ ...DECISION, text: attack, question: attack, author: attack }],
+    tasks: [{ id: "t1", title: attack, status: "todo", files: [attack], owner: attack }],
     feed: [{ id: "e1", summary: attack, files: [attack], created_at: "2026-11-02T10:00:00Z", author: attack }],
     error: attack,
   });
@@ -135,6 +152,68 @@ test("the connect button shows what will be written, and goes away once connecte
   send({ ...IN_TEAM, workspace: "connected" });
   assert.equal(button("Connect this folder"), undefined);
   assert.match(root.textContent, /This folder is connected\./);
+});
+
+test("an assumption can be confirmed, or rejected with a reason", () => {
+  const { sent, send, root, button } = mount();
+  send({ ...IN_TEAM, assumptions: [ASSUMPTION] });
+  assert.match(root.textContent, /Assumptions \(1\)/);
+  assert.match(root.textContent, /10% off/);
+  assert.match(root.textContent, /Assumed by Bob, for: What discount\?/);
+  button("Confirm").click();
+  assert.deepEqual(sent[1], { type: "confirmAssumption", assumptionId: "a1" });
+
+  button("Reject").click();
+  assert.equal(sent.length, 2, "a rejection needs a reason");
+  root.querySelector("#reason-a1").value = "It's 17%";
+  button("Reject").click();
+  assert.deepEqual(sent[2], { type: "rejectAssumption", assumptionId: "a1", reason: "It's 17%" });
+});
+
+test("a decision can be replaced or withdrawn, and its controls stay open through a refresh", () => {
+  const { sent, send, root, button, window } = mount();
+  send({ ...IN_TEAM, decisions: [DECISION] });
+  assert.match(root.textContent, /Decisions \(1\)/);
+  assert.match(root.textContent, /Decided by Alice\./);
+  const details = root.querySelector("details");
+  assert.equal(details.open, false, "collapsed, since these notify the whole team");
+
+  details.open = true;
+  details.dispatchEvent(new window.Event("toggle"));
+  const area = root.querySelector("#decision-d1");
+  area.value = "half typed";
+  area.dispatchEvent(new window.Event("input"));
+  send({ ...IN_TEAM, decisions: [DECISION] });
+  assert.equal(root.querySelector("details").open, true);
+  assert.equal(root.querySelector("#decision-d1").value, "half typed");
+
+  root.querySelector("#decision-d1").value = "20% off";
+  button("Replace").click();
+  assert.deepEqual(sent[1], { type: "changeDecision", decisionId: "d1", text: "20% off" });
+  button("Withdraw").click();
+  assert.deepEqual(sent[2], { type: "withdrawDecision", decisionId: "d1" });
+});
+
+test("the task board groups tasks by status, and a task can be added", () => {
+  const { sent, send, root, button } = mount();
+  send({
+    ...IN_TEAM,
+    tasks: [
+      { id: "1", title: "Plan it", status: "todo", files: [], owner: null },
+      { id: "2", title: "Build it", status: "in_progress", files: ["src/a.ts"], owner: "Bob" },
+      { id: "3", title: "Ship it", status: "done", files: [], owner: "Alice" },
+    ],
+  });
+  const columns = [...root.querySelectorAll(".task-column")].map((column: any) => column.textContent);
+  assert.match(columns[0], /To do \(1\)Plan it/);
+  assert.match(columns[1], /In progress \(1\)Build itBob · src\/a\.ts/);
+  assert.match(columns[2], /Done \(1\)Ship itAlice/);
+
+  button("Add task").click();
+  assert.equal(sent.length, 1, "an empty task isn't sent");
+  root.querySelector('[name="title"]').value = "New one";
+  button("Add task").click();
+  assert.deepEqual(sent[1], { type: "addTask", title: "New one" });
 });
 
 test("the feed shows who did what", () => {

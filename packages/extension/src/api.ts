@@ -4,7 +4,13 @@ import { fileStorage } from "hacky-mcp-server/credentials";
 import { redact } from "hacky-mcp-server/redact";
 
 const FEED_LIMIT = 30;
-const LIVE_TABLES = ["events", "questions", "question_waiters", "decisions", "tasks"];
+const DECISION_LIMIT = 50;
+const TASK_LIMIT = 200;
+const LIVE_TABLES = ["events", "questions", "question_waiters", "decisions", "tasks", "assumptions"];
+
+// Where the confirmation email's link lands. It opens the user's editor, so nothing has to be
+// hosted. Each URL must be in the project's allowed redirects, see supabase/config.toml.
+export const confirmationUrl = (uriScheme: string) => `${uriScheme}://hacky.hacky/confirmed`;
 
 export type Team = { id: string; name: string; invite_code: string; role: string };
 export type InboxQuestion = {
@@ -17,6 +23,9 @@ export type InboxQuestion = {
   waiting: number;
 };
 export type FeedItem = { id: string; summary: string; files: string[]; created_at: string; author: string };
+export type PendingAssumption = { id: string; text: string; created_at: string; question: string; author: string };
+export type ActiveDecision = { id: string; text: string; created_at: string; question: string | null; author: string };
+export type BoardTask = { id: string; title: string; status: string; files: string[]; owner: string | null };
 
 function unwrap<T>({ data, error }: { data: T; error: { message: string } | null }): NonNullable<T> {
   if (error) throw new Error(error.message);
@@ -26,7 +35,12 @@ function unwrap<T>({ data, error }: { data: T; error: { message: string } | null
 export class HackyApi {
   private readonly supabase: SupabaseClient;
 
-  constructor(url: string, publishableKey: string, credentialsFile: string) {
+  constructor(
+    url: string,
+    publishableKey: string,
+    credentialsFile: string,
+    private readonly emailRedirectTo?: string,
+  ) {
     // The session lives in the same file the MCP server reads, so logging in here logs agents in.
     this.supabase = createClient(url, publishableKey, {
       auth: {
@@ -51,7 +65,11 @@ export class HackyApi {
 
   // Returns false when the project requires the user to confirm their email first.
   async signUp(email: string, password: string): Promise<boolean> {
-    const { data, error } = await this.supabase.auth.signUp({ email, password });
+    const { data, error } = await this.supabase.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: this.emailRedirectTo },
+    });
     if (error) throw new Error(error.message);
     return data.session !== null;
   }
@@ -125,20 +143,108 @@ export class HackyApi {
   }
 
   async answer(questionId: string, text: string): Promise<void> {
-    const answer = redact(text);
-    const decisionId = unwrap(await this.supabase.rpc("answer_question", { target_question: questionId, answer }));
-    await this.embedDecision(decisionId, questionId, answer);
+    await this.embedDecision(
+      unwrap(await this.supabase.rpc("answer_question", { target_question: questionId, answer: redact(text) })),
+    );
   }
 
-  // Makes the decision searchable. The answer is already saved, so a failure here only means
+  // Makes the decision searchable. The decision is already saved, so a failure here only means
   // it won't appear in search_decisions, and it isn't worth showing the user an error for.
-  private async embedDecision(decisionId: string, questionId: string, answer: string): Promise<void> {
-    const { data: question } = await this.supabase.from("questions").select("text").eq("id", questionId).maybeSingle();
-    const { data, error } = await this.supabase.functions.invoke("embed", {
-      body: { text: `${question?.text ?? ""}\n${answer}` },
-    });
+  private async embedDecision(decisionId: string): Promise<void> {
+    const { data: decision } = await this.supabase
+      .from("decisions")
+      .select("text, questions(text)")
+      .eq("id", decisionId)
+      .maybeSingle();
+    if (!decision) return;
+    const question = (decision.questions as unknown as { text: string }[])[0]?.text ?? "";
+    const { data, error } = await this.supabase.functions.invoke("embed", { body: { text: `${question}\n${decision.text}` } });
     if (error) return;
     await this.supabase.from("decisions").update({ embedding: JSON.stringify(data.embedding) }).eq("id", decisionId);
+  }
+
+  async assumptions(teamId: string): Promise<PendingAssumption[]> {
+    const rows = unwrap(
+      await this.supabase
+        .from("assumptions")
+        .select("id, text, created_at, members(display_name), questions!inner(text, status)")
+        .eq("team_id", teamId)
+        .eq("status", "pending")
+        .eq("questions.status", "open")
+        .order("created_at", { ascending: true }),
+    ) as unknown as {
+      id: string;
+      text: string;
+      created_at: string;
+      members: { display_name: string } | null;
+      questions: { text: string };
+    }[];
+    return rows.map((row) => ({
+      id: row.id,
+      text: row.text,
+      created_at: row.created_at,
+      question: row.questions.text,
+      author: row.members?.display_name ?? "A teammate",
+    }));
+  }
+
+  async confirmAssumption(assumptionId: string): Promise<void> {
+    await this.embedDecision(unwrap(await this.supabase.rpc("confirm_assumption", { target_assumption: assumptionId })));
+  }
+
+  async rejectAssumption(assumptionId: string, reason: string): Promise<void> {
+    unwrap(await this.supabase.rpc("reject_assumption", { target_assumption: assumptionId, reason: redact(reason) }));
+  }
+
+  async decisions(teamId: string): Promise<ActiveDecision[]> {
+    const rows = unwrap(
+      await this.supabase
+        .from("decisions")
+        .select("id, text, created_at, members(display_name), questions(text)")
+        .eq("team_id", teamId)
+        .eq("status", "active")
+        .order("created_at", { ascending: false })
+        .limit(DECISION_LIMIT),
+    ) as unknown as {
+      id: string;
+      text: string;
+      created_at: string;
+      members: { display_name: string } | null;
+      questions: { text: string }[];
+    }[];
+    return rows.map((row) => ({
+      id: row.id,
+      text: row.text,
+      created_at: row.created_at,
+      question: row.questions[0]?.text ?? null,
+      author: row.members?.display_name ?? "A teammate",
+    }));
+  }
+
+  async changeDecision(decisionId: string, text: string): Promise<void> {
+    await this.embedDecision(
+      unwrap(await this.supabase.rpc("change_decision", { target_decision: decisionId, new_text: redact(text) })),
+    );
+  }
+
+  async withdrawDecision(decisionId: string): Promise<void> {
+    unwrap(await this.supabase.rpc("change_decision", { target_decision: decisionId, new_text: null }));
+  }
+
+  async tasks(teamId: string): Promise<BoardTask[]> {
+    const rows = unwrap(
+      await this.supabase
+        .from("tasks")
+        .select("id, title, status, files, members(display_name)")
+        .eq("team_id", teamId)
+        .order("created_at", { ascending: true })
+        .limit(TASK_LIMIT),
+    ) as unknown as (Omit<BoardTask, "owner"> & { members: { display_name: string } | null })[];
+    return rows.map(({ members, ...row }) => ({ ...row, owner: members?.display_name ?? null }));
+  }
+
+  async addTask(teamId: string, title: string): Promise<void> {
+    unwrap(await this.supabase.from("tasks").insert({ team_id: teamId, title: redact(title) }));
   }
 
   // Calls onChange whenever a teammate or agent changes anything the sidebar shows.
