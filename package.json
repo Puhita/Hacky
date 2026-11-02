@@ -1,0 +1,11 @@
+{
+  "name": "hacky",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "devDependencies": {
+    "@supabase/supabase-js": "^2.118.0",
+    "supabase": "^2.122.0"
+  }
+}

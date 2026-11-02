@@ -33,7 +33,7 @@ Markdown files record what *already happened*. Nothing handles a **live, unresol
 3. **Task claiming.** `claim_task` prevents duplicate work and warns about overlapping files.
 4. **Decision broker.**
    - Agents search existing decisions before asking.
-   - New questions are deduplicated against open and answered ones (semantic match). Three agents asking the same thing become one question with three waiters.
+   - New questions are compared against open and answered ones (semantic match), and the asking agent decides whether a similar one is really the same. Three agents asking the same thing become one question with three waiters.
    - Questions are routed to the right human by task and file ownership.
    - One answer is saved as a decision and fanned out to all waiting agents.
 5. **Assumptions.** A blocked agent can declare an assumption and keep working. Humans confirm or reject it later. A rejection or changed decision notifies every agent that relied on it.
@@ -57,11 +57,14 @@ VS Code extension (sidebar UI) ---------------> Supabase (Postgres + Realtime + 
 | `get_context()` | My tasks, active decisions, recent teammate activity |
 | `log_progress(summary, files)` | Record finished work |
 | `claim_task(task_id)` | Take a task, detect file overlap |
+| `create_task(title, files?)` | Add a task to the team board |
+| `complete_task(task_id)` | Mark a task you own as done |
 | `search_decisions(query)` | Check for an existing answer before asking |
-| `ask(question, context, assumption?)` | Dedupe, route, return a decision or a pending question id |
-| `check_answers()` | Answers and retractions for questions this agent is waiting on |
+| `ask(question, context, assumption?, task_id?, files?, confirmed_new?)` | Route the question and return a pending question id, or return similar questions for the agent to judge |
+| `join_question(question_id, assumption?)` | Wait on a teammate's identical question, or get its answer if it has one |
+| `check_answers(wait_seconds?)` | Answers and retractions for questions this agent is waiting on, optionally holding the call open until one arrives |
 
-MCP servers cannot wake an idle agent, so agents poll `check_answers` between steps. If the work doesn't depend on the answer, the agent proceeds on its declared assumption.
+MCP servers cannot wake an idle agent, and polling between steps isn't enough: in testing, agents gave up within seconds, long before a human could reply. So an agent whose work depends on the answer calls `check_answers` with `wait_seconds`, which holds the call open on the server until an answer arrives or the time runs out. Waiting uses no tokens, but the agent can't do anything else meanwhile. If the work doesn't depend on the answer, the agent proceeds on its declared assumption and checks between steps.
 
 ### Data model
 
@@ -95,7 +98,7 @@ MCP servers cannot wake an idle agent, so agents poll `check_answers` between st
 ## Known risks
 
 1. **Agent compliance.** Agents may ignore the tools. Test this first, using strong `CLAUDE.md` wording and Claude Code hooks (e.g. SessionStart calling `get_context`).
-2. **Dedupe false positives.** Merging two different questions sends the wrong answer to an agent. Prefer a duplicate question over a wrong merge.
+2. **Dedupe false positives.** Merging two different questions sends the wrong answer to an agent. Prefer a duplicate question over a wrong merge. Similarity scores alone can't prevent this: in testing, "minimum password length" and "maximum password length" scored higher than most true paraphrases, so the asking agent makes the call.
 3. **Routing accuracy.** Wrong routing turns the inbox into spam. Route by explicit task owner, fall back to the team lead.
 4. **Bad answers broadcast.** One wrong answer reaches many agents. Show who will act on it and support retraction.
 5. **Secrets.** Never store keys or `.env` contents; filter before writing to the shared DB.
