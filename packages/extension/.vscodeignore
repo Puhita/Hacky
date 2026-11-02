@@ -1,0 +1,5 @@
+**
+!dist/extension.cjs
+!media/**
+!package.json
+!LICENSE

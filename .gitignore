@@ -1,0 +1,11 @@
+.claude/
+CLAUDE.md
+node_modules/
+dist/
+out/
+.vscode-test/
+*.vsix
+*.tgz
+.env
+.env.*
+!.env.example

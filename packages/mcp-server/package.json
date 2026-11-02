@@ -1,0 +1,31 @@
+{
+  "name": "hacky-mcp-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "hacky-mcp-server": "dist/index.js"
+  },
+  "exports": {
+    "./credentials": "./dist/credentials.js",
+    "./redact": "./dist/redact.js"
+  },
+  "files": [
+    "dist",
+    "!dist/*.test.js",
+    "!dist/*.test.d.ts"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --env-file=../../.env --test \"dist/**/*.test.js\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@supabase/supabase-js": "^2.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.0.0"
+  }
+}
