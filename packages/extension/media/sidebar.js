@@ -43,7 +43,45 @@
     return el("form", { onsubmit: (event) => event.preventDefault() }, [...rows, buttonRow]);
   }
 
-  const section = (title, children) => el("section", {}, [el("h2", { text: title }), ...children]);
+  // Which sections and cards are folded survives re-renders and reloads of the panel.
+  const folds = { ...(vscode.getState()?.folds ?? {}) };
+
+  // A <details> the person can fold. Without a saved choice it starts as defaultOpen.
+  function fold(key, defaultOpen, className, summaryChildren, bodyChildren) {
+    const node = el("details", { class: className }, [
+      el("summary", {}, summaryChildren),
+      el("div", { class: "fold-body" }, bodyChildren),
+    ]);
+    node.open = key in folds ? folds[key] : defaultOpen;
+    node.ontoggle = () => {
+      if (folds[key] === node.open) return;
+      folds[key] = node.open;
+      vscode.setState({ folds });
+    };
+    return node;
+  }
+
+  // With a key the section can be folded; without one (log in, team choice) it is always open.
+  function section(title, children, key, defaultOpen = true) {
+    if (!key) return el("section", {}, [el("h2", { text: title }), ...children]);
+    return el("section", {}, [fold(`section-${key}`, defaultOpen, "section-fold", [el("span", { class: "section-title", text: title })], children)]);
+  }
+
+  // A card with its headline on the summary line: one truncated line when folded, the full text when open.
+  function foldCard(key, defaultOpen, headline, badge, bodyChildren) {
+    return el("article", { class: "card" }, [
+      fold(`card-${key}`, defaultOpen, "card-fold", [badge, el("span", { class: "card-title", text: headline })].filter(Boolean), bodyChildren),
+    ]);
+  }
+
+  function setAllFolds(open) {
+    for (const node of document.querySelectorAll("details.section-fold, details.card-fold")) {
+      if (node.open !== open) {
+        node.open = open;
+        node.dispatchEvent(new Event("toggle"));
+      }
+    }
+  }
 
   function renderSignedOut() {
     return section("Log in to Hacky", [
@@ -125,7 +163,7 @@
             onclick: () => vscode.postMessage({ type: "connectWorkspace" }),
           })
         : null,
-    ]);
+    ], "workspace", state.workspace !== "connected");
   }
 
   // A text box that survives re-renders, which happen whenever anything changes for the team.
@@ -145,26 +183,30 @@
   function renderQuestion(question) {
     const waiting = question.waiting === 1 ? "1 agent waiting" : `${question.waiting} agents waiting`;
     const answer = draftArea(`answer-${question.id}`, "Your answer");
-    return el("article", { class: "card" }, [
+    return foldCard(
+      `q-${question.id}`,
+      true,
+      question.text,
       question.routed_to_me ? el("span", { class: "badge", text: "For you" }) : null,
-      el("p", { class: "question", text: question.text }),
-      question.context ? el("p", { class: "muted", text: question.context }) : null,
-      el("p", { class: "muted", text: `From ${question.asked_by_name}. ${waiting}.` }),
-      answer,
-      el("button", {
-        type: "button",
-        class: "wide",
-        text: "Send answer",
-        onclick: () => sendDraft(answer, (text) => ({ type: "answer", questionId: question.id, text })),
-      }),
-    ]);
+      [
+        question.context ? el("p", { class: "muted", text: question.context }) : null,
+        el("p", { class: "muted", text: `From ${question.asked_by_name}. ${waiting}.` }),
+        answer,
+        el("button", {
+          type: "button",
+          class: "wide",
+          text: "Send answer",
+          onclick: () => sendDraft(answer, (text) => ({ type: "answer", questionId: question.id, text })),
+        }),
+      ],
+    );
   }
 
   function renderInbox(state) {
     return section(`Inbox (${state.inbox.length})`, [
       state.inbox.length === 0 ? el("p", { class: "muted", text: "No open questions." }) : null,
       ...state.inbox.map(renderQuestion),
-    ]);
+    ], "inbox");
   }
 
   // Questions between agents. Open ones sent to this person can be answered here, for when
@@ -174,9 +216,9 @@
     const open = thread.answer === null;
     const who = incoming ? `${thread.other}'s agent asks` : `Your agent asked ${thread.other}`;
     const answer = incoming && open ? draftArea(`peer-${thread.id}`, "Your answer") : null;
-    return el("article", { class: "card" }, [
+    // Only a question waiting for this person starts open; finished conversations start folded.
+    return foldCard(`t-${thread.id}`, incoming && open, thread.question, null, [
       el("p", { class: "muted", text: who }),
-      el("p", { class: "question", text: thread.question }),
       thread.context ? el("p", { class: "muted", text: thread.context }) : null,
       !open
         ? el("p", { text: thread.answer })
@@ -201,7 +243,7 @@
     return section(`Agent questions (${waiting})`, [
       state.agentChat.length === 0 ? el("p", { class: "muted", text: "No agent has asked another agent anything yet." }) : null,
       ...state.agentChat.map(renderThread),
-    ]);
+    ], "agent");
   }
 
   function renderPulseMember(member) {
@@ -221,13 +263,12 @@
     return section("Team pulse", [
       state.pulse.length === 0 ? el("p", { class: "muted", text: "Nobody is on the team yet." }) : null,
       ...state.pulse.map(renderPulseMember),
-    ]);
+    ], "pulse");
   }
 
   function renderAssumption(assumption) {
     const reason = draftArea(`reason-${assumption.id}`, "Why it's wrong, or what to do instead");
-    return el("article", { class: "card" }, [
-      el("p", { class: "question", text: assumption.text }),
+    return foldCard(`a-${assumption.id}`, true, assumption.text, null, [
       el("p", { class: "muted", text: `Assumed by ${assumption.author}, for: ${assumption.question}` }),
       el("button", {
         type: "button",
@@ -248,12 +289,12 @@
     return section(`Assumptions (${state.assumptions.length})`, [
       state.assumptions.length === 0 ? el("p", { class: "muted", text: "No agent is working on an assumption." }) : null,
       ...state.assumptions.map(renderAssumption),
-    ]);
+    ], "assumptions");
   }
 
   function renderDecision(decision) {
     const replacement = draftArea(`decision-${decision.id}`, "The new decision");
-    const actions = el("details", {}, [
+    const actions = el("details", { class: "actions" }, [
       el("summary", { text: "Change or withdraw" }),
       el("p", { class: "muted", text: "Either one tells every agent on the team." }),
       replacement,
@@ -271,8 +312,8 @@
     ]);
     actions.open = openDecisions.has(decision.id);
     actions.ontoggle = () => (actions.open ? openDecisions.add(decision.id) : openDecisions.delete(decision.id));
-    return el("article", { class: "card" }, [
-      el("p", { class: "question", text: decision.text }),
+    // Decisions are settled, so they start folded.
+    return foldCard(`d-${decision.id}`, false, decision.text, null, [
       decision.question ? el("p", { class: "muted", text: decision.question }) : null,
       el("p", { class: "muted", text: `Decided by ${decision.author}.` }),
       actions,
@@ -283,7 +324,7 @@
     return section(`Decisions (${state.decisions.length})`, [
       state.decisions.length === 0 ? el("p", { class: "muted", text: "No decisions yet." }) : null,
       ...state.decisions.map(renderDecision),
-    ]);
+    ], "decisions");
   }
 
   const TASK_COLUMNS = [
@@ -309,7 +350,7 @@
         ]);
       }),
       form([{ name: "title", label: "New task" }], [{ label: "Add task", secondary: true, send: (values) => ({ type: "addTask", ...values }) }]),
-    ]);
+    ], "tasks");
   }
 
   function renderFeed(state) {
@@ -324,7 +365,7 @@
           }),
         ]),
       ),
-    ]);
+    ], "feed", false);
   }
 
   function renderTeam(state) {
@@ -338,12 +379,16 @@
           text: "Copy invite code",
           onclick: () => navigator.clipboard.writeText(state.team.invite_code),
         }),
-        el("button", {
-          type: "button",
-          class: "secondary",
-          text: "Open map",
-          onclick: () => vscode.postMessage({ type: "openMap" }),
-        }),
+        el("div", { class: "row" }, [
+          el("button", {
+            type: "button",
+            class: "secondary",
+            text: "Open map",
+            onclick: () => vscode.postMessage({ type: "openMap" }),
+          }),
+          el("button", { type: "button", class: "secondary", text: "Collapse all", onclick: () => setAllFolds(false) }),
+          el("button", { type: "button", class: "secondary", text: "Expand all", onclick: () => setAllFolds(true) }),
+        ]),
       ]),
       renderWorkspace(state),
       renderInbox(state),

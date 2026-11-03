@@ -192,6 +192,40 @@ test("a chat that is still active isn't taken over unless the person confirms", 
   assert.ok(isError && /no such session/.test(text), "only the person's own chats can be resumed");
 });
 
+test("a second chat claiming a task its person's other chat already owns is warned, naming that chat", async () => {
+  const teamId = await newTeam();
+  const { data: task, error } = await admin.from("tasks").insert({ team_id: teamId, title: "Build the login form" }).select("id").single();
+  assert.ifError(error);
+
+  const first = await chat(bob, teamId);
+  const { session_id: firstSession } = await call(first, "get_context");
+  const firstClaim = await call(first, "claim_task", { task_id: task!.id });
+  assert.equal(firstClaim.claimed, true);
+  assert.equal(firstClaim.other_chats, undefined);
+  assert.equal(firstClaim.already_yours, undefined);
+
+  // Claiming again from the same chat is not a duplicate.
+  assert.equal((await call(first, "claim_task", { task_id: task!.id })).other_chats, undefined);
+
+  const second = await chat(bob, teamId);
+  const warned = await call(second, "claim_task", { task_id: task!.id });
+  assert.equal(warned.already_yours, true);
+  assert.equal(warned.other_chats.length, 1);
+  assert.equal(warned.other_chats[0].session_id, firstSession);
+  assert.equal(warned.other_chats[0].state, "active_now");
+  assert.match(warned.warning, /another of your chats/i);
+
+  await first.close();
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  const ended = await call(await chat(bob, teamId), "claim_task", { task_id: task!.id });
+  assert.equal(ended.other_chats.find((item: { session_id: string }) => item.session_id === firstSession).state, "ended");
+
+  // A teammate still just hears who owns it.
+  const refused = await call(await chat(lead, teamId), "claim_task", { task_id: task!.id });
+  assert.equal(refused.claimed, false);
+  assert.equal(refused.other_chats, undefined);
+});
+
 test("an agent asks a teammate's agent, who answers, and the answer arrives once", async () => {
   const teamId = await newTeam();
   const asker = await chat(lead, teamId);

@@ -64,6 +64,11 @@ type SessionRow = {
   closed_at: string | null;
 };
 
+function sessionState(session: Pick<SessionRow, "last_seen_at" | "closed_at">): "ended" | "active_now" | "idle" {
+  if (session.closed_at !== null) return "ended";
+  return Date.now() - Date.parse(session.last_seen_at) < ACTIVE_WINDOW_SECONDS * 1000 ? "active_now" : "idle";
+}
+
 // What check_answers looks at on each pass.
 type Poll = {
   waiters: WaiterRow[];
@@ -528,6 +533,8 @@ export function createServer(
           .maybeSingle(),
       );
       if (claimed) {
+        // Remember which chat took the task, so another chat of the same person claiming it can be warned.
+        unwrap(await supabase.from("agent_sessions").update({ task_id }).eq("id", sessionId));
         const overlapping = await overlappingTasks(userId, claimed.files);
         return { claimed: true, task: claimed, ...(overlapping.length > 0 && { overlapping_tasks: overlapping }) };
       }
@@ -541,7 +548,34 @@ export function createServer(
           .maybeSingle(),
       ) as unknown as { owner_id: string; members: { display_name: string } | null; title: string } | null;
       if (!existing) throw new Error(`No task ${task_id} in this team.`);
-      if (existing.owner_id === userId) return { claimed: true, already_yours: true, task: existing };
+      if (existing.owner_id === userId) {
+        // The task is mine, but another of my chats may have taken it and be working on it right now.
+        const others = unwrapRequired(
+          await supabase
+            .from("agent_sessions")
+            .select("id, focus, last_seen_at, closed_at")
+            .eq("team_id", teamId)
+            .eq("user_id", userId)
+            .eq("task_id", task_id)
+            .neq("id", sessionId)
+            .is("resumed_by", null)
+            .order("last_seen_at", { ascending: false }),
+        ) as Pick<SessionRow, "id" | "focus" | "last_seen_at" | "closed_at">[];
+        if (others.length === 0) return { claimed: true, already_yours: true, task: existing };
+        return {
+          claimed: true,
+          already_yours: true,
+          task: existing,
+          other_chats: others.map((session) => ({
+            session_id: session.id,
+            state: sessionState(session),
+            last_seen_at: session.last_seen_at,
+            focus: session.focus,
+          })),
+          warning:
+            "Another of your chats already took this task, so working on it here may duplicate that work. If that chat is active_now, leave the task to it. If it is idle or ended, call resume_session with its session_id to continue from its notes.",
+        };
+      }
       return { claimed: false, owned_by: existing.members?.display_name, title: existing.title };
     },
   );
