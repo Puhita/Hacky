@@ -4,7 +4,7 @@
 
 Hacky is a VS Code extension plus a small MCP server that gives every teammate's AI agent (Claude Code first) one shared memory, task board, and question queue. When an agent is blocked on a decision, the question is asked **once**, answered **once**, and the answer reaches **every** agent that needs it.
 
-> Status: early planning / pre-MVP.
+> Status: MVP built and being tested. `hacky-mcp-server` is on npm; the extension is installed from a `.vsix` and isn't on the Marketplace yet. Not yet used at a real hackathon.
 
 ## The problem
 
@@ -123,17 +123,17 @@ A rejected assumption notifies the agent that declared it and every other agent 
 5. **Secrets.** Never store keys or `.env` contents; filter before writing to the shared DB.
 6. **Chats and teammate questions.** An agent only sees a teammate's question on its next Hacky call, so the sidebar notification is the fallback for the human. A chat whose process is killed looks idle only after 10 minutes. The digest runs only once the sidebar has been opened in the session.
 
-## Upgrading to sessions and teammate questions
+## Install
 
-The migration `20261102160000_sessions_and_teammate_questions.sql` drops the old `ask_question` and gives waits a session, so the database, the MCP server and the extension have to move together. Whoever owns the Supabase project (the `.env` with the project ref and database password) does this:
+For a teammate joining a team that already exists:
 
-1. **Review and merge** the branch with these changes.
-2. **Run the tests** with the real `.env`, since none of the new server tests have run against a live project: `npm test` in `packages/mcp-server` and `packages/extension`, and `node --env-file=.env --test supabase/tests/isolation.test.mjs`.
-3. **Publish the MCP server.** Bump the version in `packages/mcp-server/package.json` and publish `hacky-mcp-server`. The extension starts it with `npx -y hacky-mcp-server`, so teammates get the new version on their next chat.
-4. **Apply the migration** straight after step 3: `npx supabase db push`. Waits already in flight move to a closed session per person, which their next chat can take over. Between steps 3 and 4 agents on the old or new server see errors on `ask`.
-5. **Package and share the extension:** `npm run package` in `packages/extension`, then everyone installs the new `.vsix`.
-6. **Each teammate clicks "Connect this folder"** once. That refreshes the managed block in `CLAUDE.md`, which is where agents learn about `resume_session`, `ask_teammate` and `save_handoff`.
-7. **Everyone starts new Claude Code chats.** Running chats keep the old server.
+1. **Install the extension.** Get the `.vsix` from whoever built it (`npm run package` in `packages/extension` makes one), then run "Extensions: Install from VSIX..." in VS Code.
+2. **Open the Hacky sidebar and log in.** Sign up first if you're new; Supabase emails a confirmation link that opens VS Code.
+3. **Create a team, or join one** with the invite code from a teammate.
+4. **Click "Connect this folder".** This writes `.mcp.json` (which starts the server with `npx -y hacky-mcp-server`), the local Claude Code settings, and the managed block in `CLAUDE.md` that tells agents to use the Hacky tools.
+5. **Start a new Claude Code chat** in the folder. Chats that were already running keep their old server.
+
+Whoever owns the Supabase project applies the migrations with `npx supabase db push` (needs the `.env` with the project ref and database password). The extension and server only need Node and npm on each teammate's machine.
 
 ## Success metric
 
