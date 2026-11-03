@@ -82,10 +82,77 @@ button.wide {
 }
 
 .card {
-  margin-bottom: 10px;
-  padding: 8px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
   border: 1px solid var(--vscode-panel-border, transparent);
-  background: var(--vscode-sideBar-background);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+}
+
+section {
+  margin-top: 12px;
+  border-top: 1px solid var(--vscode-panel-border, transparent);
+}
+
+/* Folding: one chevron per section and card, and a one-line headline when a card is folded. */
+details.section-fold > summary,
+details.card-fold > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 0;
+  color: inherit;
+  list-style: none;
+}
+
+details.section-fold > summary::-webkit-details-marker,
+details.card-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.section-fold > summary::before,
+details.card-fold > summary::before {
+  content: "\25B8";
+  flex: none;
+  color: var(--vscode-descriptionForeground);
+}
+
+details[open].section-fold > summary::before,
+details[open].card-fold > summary::before {
+  content: "\25BE";
+}
+
+.section-title {
+  font-size: 0.85em;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground);
+}
+
+.card-title {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+}
+
+details[open].card-fold > summary > .card-title {
+  white-space: normal;
+}
+
+.fold-body {
+  padding-bottom: 6px;
+}
+
+details.card-fold > .fold-body {
+  padding-left: 14px;
+}
+
+.row button {
+  margin-bottom: 8px;
 }
 
 .badge {

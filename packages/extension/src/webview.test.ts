@@ -13,7 +13,12 @@ function mount() {
   const dom = new JSDOM('<!DOCTYPE html><div id="root"></div>', { runScripts: "outside-only" });
   const window = dom.window as any;
   // Serialized, as a real webview's postMessage does.
-  window.acquireVsCodeApi = () => ({ postMessage: (message: unknown) => sent.push(JSON.parse(JSON.stringify(message))) });
+  let saved: unknown;
+  window.acquireVsCodeApi = () => ({
+    postMessage: (message: unknown) => sent.push(JSON.parse(JSON.stringify(message))),
+    getState: () => saved,
+    setState: (value: unknown) => (saved = JSON.parse(JSON.stringify(value))),
+  });
   window.eval(SCRIPT);
   const send = (state: unknown) =>
     window.dispatchEvent(new window.MessageEvent("message", { data: state }));
@@ -190,7 +195,7 @@ test("a decision can be replaced or withdrawn, and its controls stay open throug
   send({ ...IN_TEAM, decisions: [DECISION] });
   assert.match(root.textContent, /Decisions \(1\)/);
   assert.match(root.textContent, /Decided by Alice\./);
-  const details = root.querySelector("details");
+  const details = root.querySelector("details.actions");
   assert.equal(details.open, false, "collapsed, since these notify the whole team");
 
   details.open = true;
@@ -199,7 +204,7 @@ test("a decision can be replaced or withdrawn, and its controls stay open throug
   area.value = "half typed";
   area.dispatchEvent(new window.Event("input"));
   send({ ...IN_TEAM, decisions: [DECISION] });
-  assert.equal(root.querySelector("details").open, true);
+  assert.equal(root.querySelector("details.actions").open, true);
   assert.equal(root.querySelector("#decision-d1").value, "half typed");
 
   root.querySelector("#decision-d1").value = "20% off";
@@ -207,6 +212,32 @@ test("a decision can be replaced or withdrawn, and its controls stay open throug
   assert.deepEqual(sent[1], { type: "changeDecision", decisionId: "d1", text: "20% off" });
   button("Withdraw").click();
   assert.deepEqual(sent[2], { type: "withdrawDecision", decisionId: "d1" });
+});
+
+test("every section and card can be folded, and Collapse all and Expand all fold them together", () => {
+  const { send, root, button, window } = mount();
+  const state = { ...IN_TEAM, inbox: [QUESTION], assumptions: [ASSUMPTION], decisions: [DECISION] };
+  send(state);
+  const folds = () => [...root.querySelectorAll("details.section-fold, details.card-fold")] as any[];
+  assert.ok(folds().length >= 8, "each section and each card has a fold");
+  assert.equal(root.querySelector("details.section-fold").nextElementSibling, null, "a section is one fold, not a loose heading");
+
+  const inbox = folds().find((node) => node.textContent.includes("Inbox"));
+  assert.equal(inbox.open, true);
+  assert.equal(folds().find((node) => node.textContent.startsWith("Live feed")).open, false, "the feed starts folded");
+  assert.equal(root.querySelector(".card-title").textContent, "What discount?", "a card's headline is on its summary line");
+
+  button("Collapse all").click();
+  assert.ok(folds().every((node) => !node.open));
+  send(state);
+  assert.ok(folds().every((node) => !node.open), "stays folded through a refresh");
+  button("Expand all").click();
+  assert.ok(folds().every((node) => node.open));
+
+  folds()[0].open = false;
+  folds()[0].dispatchEvent(new window.Event("toggle"));
+  send(state);
+  assert.equal(folds()[0].open, false, "one fold keeps its own choice");
 });
 
 test("the task board groups tasks by status, and a task can be added", () => {
