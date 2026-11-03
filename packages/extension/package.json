@@ -22,6 +22,10 @@
       {
         "command": "hacky.openMap",
         "title": "Hacky: Open Map"
+      },
+      {
+        "command": "hacky.openBoard",
+        "title": "Hacky: Open Board"
       }
     ],
     "configuration": {

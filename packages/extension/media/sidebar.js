@@ -62,39 +62,108 @@
   }
 
   // With a key the section can be folded; without one (log in, team choice) it is always open.
-  function section(title, children, key, defaultOpen = true) {
+  // The count, when given, is a badge on the right of the title.
+  function section(title, children, key, defaultOpen = true, count) {
     if (!key) return el("section", {}, [el("h2", { text: title }), ...children]);
-    return el("section", {}, [fold(`section-${key}`, defaultOpen, "section-fold", [el("span", { class: "section-title", text: title })], children)]);
+    const heading = [
+      el("span", { class: "section-title", text: title }),
+      count === undefined ? null : el("span", { class: `count${count > 0 ? " active" : ""}`, text: String(count) }),
+    ].filter(Boolean);
+    return el("section", { class: "panel" }, [fold(`section-${key}`, defaultOpen, "section-fold", heading, children)]);
   }
 
   // A card with its headline on the summary line: one truncated line when folded, the full text when open.
+  // A list entry (task, update, person) that is one truncated line until the person opens it.
+  function foldItem(key, headline, bodyChildren) {
+    return el("article", { class: "feed-item" }, [
+      fold(`item-${key}`, false, "item-fold", [el("span", { class: "card-title plain", text: headline })], bodyChildren),
+    ]);
+  }
+
   function foldCard(key, defaultOpen, headline, badge, bodyChildren) {
     return el("article", { class: "card" }, [
       fold(`card-${key}`, defaultOpen, "card-fold", [badge, el("span", { class: "card-title", text: headline })].filter(Boolean), bodyChildren),
     ]);
   }
 
-  function setAllFolds(open) {
-    for (const node of document.querySelectorAll("details.section-fold, details.card-fold")) {
-      if (node.open !== open) {
-        node.open = open;
-        node.dispatchEvent(new Event("toggle"));
-      }
+
+  // Log in and Sign up share one card: two tabs, one form. What was typed survives switching tabs.
+  let authMode = "login";
+  const authValues = { email: "", password: "" };
+
+  function brandMark() {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    for (const [name, value] of Object.entries({ viewBox: "0 0 24 24", width: "28", height: "28", fill: "none", stroke: "currentColor", "stroke-width": "2", "stroke-linecap": "round", "aria-hidden": "true" })) {
+      svg.setAttribute(name, value);
     }
+    for (const d of ["M6 4v16", "M18 4v16", "M6 12h12"]) {
+      const path = document.createElementNS(ns, "path");
+      path.setAttribute("d", d);
+      svg.appendChild(path);
+    }
+    return el("div", { class: "brand-mark" }, [svg]);
+  }
+
+  function authField(name, label, type, autocomplete) {
+    const input = el("input", { type, name, id: `auth-${name}`, autocomplete, placeholder: label });
+    input.value = authValues[name];
+    input.oninput = () => (authValues[name] = input.value);
+    return { input, field: el("div", { class: "field" }, [el("label", { for: `auth-${name}`, text: label }), input]) };
   }
 
   function renderSignedOut() {
-    return section("Log in to Hacky", [
-      form(
-        [
-          { name: "email", label: "Email", type: "email" },
-          { name: "password", label: "Password", type: "password" },
-        ],
-        [
-          { label: "Log in", send: (values) => ({ type: "signIn", ...values }) },
-          { label: "Create account", secondary: true, send: (values) => ({ type: "signUp", ...values }) },
-        ],
-      ),
+    const signingUp = authMode === "signup";
+    const email = authField("email", "Email", "email", "email");
+    const password = authField("password", "Password", "password", signingUp ? "new-password" : "current-password");
+    const toggle = el("button", {
+      type: "button",
+      class: "link",
+      text: "Show",
+      "aria-label": "Show password",
+      onclick: () => {
+        const hidden = password.input.type === "password";
+        password.input.type = hidden ? "text" : "password";
+        toggle.textContent = hidden ? "Hide" : "Show";
+        toggle.setAttribute("aria-label", hidden ? "Hide password" : "Show password");
+      },
+    });
+    password.field.appendChild(toggle);
+
+    const submit = () => {
+      if (authValues.email.trim() === "" || authValues.password.trim() === "") return;
+      vscode.postMessage({ type: signingUp ? "signUp" : "signIn", email: authValues.email, password: authValues.password });
+    };
+    const tab = (mode, label) =>
+      el("button", {
+        type: "button",
+        role: "tab",
+        class: `tab${authMode === mode ? " selected" : ""}`,
+        "aria-selected": String(authMode === mode),
+        text: label,
+        onclick: () => {
+          if (authMode === mode) return;
+          authMode = mode;
+          if (lastState) render(lastState);
+        },
+      });
+
+    return el("section", { class: "auth" }, [
+      el("div", { class: "brand" }, [
+        brandMark(),
+        el("h1", { text: "Hacky" }),
+        el("p", { class: "muted", text: "One shared memory, task board and question queue for your team's agents." }),
+      ]),
+      el("div", { class: "tabs", role: "tablist" }, [tab("login", "Log in"), tab("signup", "Sign up")]),
+      el("form", { class: "auth-form", onsubmit: (event) => (event.preventDefault(), submit()) }, [
+        email.field,
+        password.field,
+        el("button", { type: "submit", class: "wide primary", text: signingUp ? "Create account" : "Log in to Hacky" }),
+      ]),
+      el("p", {
+        class: "muted auth-hint",
+        text: signingUp ? "Already have an account? Pick Log in above." : "New here? Pick Sign up above to create an account.",
+      }),
     ]);
   }
 
@@ -203,10 +272,10 @@
   }
 
   function renderInbox(state) {
-    return section(`Inbox (${state.inbox.length})`, [
+    return section("Inbox", [
       state.inbox.length === 0 ? el("p", { class: "muted", text: "No open questions." }) : null,
       ...state.inbox.map(renderQuestion),
-    ], "inbox");
+    ], "inbox", state.inbox.length > 0, state.inbox.length);
   }
 
   // Questions between agents. Open ones sent to this person can be answered here, for when
@@ -240,17 +309,15 @@
 
   function renderAgentChat(state) {
     const waiting = state.agentChat.filter((thread) => thread.direction === "incoming" && thread.answer === null).length;
-    return section(`Agent questions (${waiting})`, [
+    return section("Agent questions", [
       state.agentChat.length === 0 ? el("p", { class: "muted", text: "No agent has asked another agent anything yet." }) : null,
       ...state.agentChat.map(renderThread),
-    ], "agent");
+    ], "agent", waiting > 0, waiting);
   }
 
   function renderPulseMember(member) {
     const chats = member.chats === 1 ? "1 chat active" : `${member.chats} chats active`;
-    return el("article", { class: "feed-item" }, [
-      el("p", { text: member.me ? `${member.name} (you)` : member.name }),
-      el("p", { class: "muted", text: member.chats > 0 ? chats : "No chat active" }),
+    return foldItem(`p-${member.name}`, `${member.me ? `${member.name} (you)` : member.name} · ${member.chats > 0 ? chats : "No chat active"}`, [
       ...member.focus.map((focus) => el("p", { class: "muted", text: `Now: ${focus}` })),
       member.updates > 0
         ? el("p", { class: "muted", text: `${member.updates === 1 ? "1 update" : `${member.updates} updates`} in the last hour:` })
@@ -286,10 +353,10 @@
   }
 
   function renderAssumptions(state) {
-    return section(`Assumptions (${state.assumptions.length})`, [
+    return section("Assumptions", [
       state.assumptions.length === 0 ? el("p", { class: "muted", text: "No agent is working on an assumption." }) : null,
       ...state.assumptions.map(renderAssumption),
-    ], "assumptions");
+    ], "assumptions", state.assumptions.length > 0, state.assumptions.length);
   }
 
   function renderDecision(decision) {
@@ -321,10 +388,10 @@
   }
 
   function renderDecisions(state) {
-    return section(`Decisions (${state.decisions.length})`, [
+    return section("Decisions", [
       state.decisions.length === 0 ? el("p", { class: "muted", text: "No decisions yet." }) : null,
       ...state.decisions.map(renderDecision),
-    ], "decisions");
+    ], "decisions", false, state.decisions.length);
   }
 
   const TASK_COLUMNS = [
@@ -340,8 +407,7 @@
         return el("div", { class: "task-column" }, [
           el("h3", { text: `${title} (${tasks.length})` }),
           ...tasks.map((task) =>
-            el("article", { class: "feed-item" }, [
-              el("p", { text: task.title }),
+            foldItem(`task-${task.id ?? task.title}`, task.title, [
               task.owner || task.files.length > 0
                 ? el("p", { class: "muted", text: [task.owner, task.files.join(", ")].filter(Boolean).join(" · ") })
                 : null,
@@ -350,15 +416,14 @@
         ]);
       }),
       form([{ name: "title", label: "New task" }], [{ label: "Add task", secondary: true, send: (values) => ({ type: "addTask", ...values }) }]),
-    ], "tasks");
+    ], "tasks", true, state.tasks.filter((task) => task.status !== "done").length);
   }
 
   function renderFeed(state) {
     return section("Live feed", [
       state.feed.length === 0 ? el("p", { class: "muted", text: "No activity yet." }) : null,
       ...state.feed.map((item) =>
-        el("article", { class: "feed-item" }, [
-          el("p", { text: item.summary }),
+        foldItem(`feed-${item.id ?? item.created_at}`, item.summary, [
           el("p", {
             class: "muted",
             text: [item.author, new Date(item.created_at).toLocaleTimeString(), item.files.join(", ")].filter(Boolean).join(" · "),
@@ -370,24 +435,32 @@
 
   function renderTeam(state) {
     return el("div", {}, [
-      el("header", {}, [
+      el("header", { class: "team-header" }, [
         el("h1", { text: state.team.name }),
-        el("p", { class: "muted", text: `Invite code: ${state.team.invite_code}` }),
-        el("button", {
-          type: "button",
-          class: "secondary",
-          text: "Copy invite code",
-          onclick: () => navigator.clipboard.writeText(state.team.invite_code),
-        }),
+        el("div", { class: "invite" }, [
+          el("span", { class: "muted", text: "Invite code" }),
+          el("code", { text: state.team.invite_code }),
+          el("button", {
+            type: "button",
+            class: "link",
+            text: "Copy",
+            onclick: () => {
+              navigator.clipboard.writeText(state.team.invite_code);
+            },
+          }),
+        ]),
         el("div", { class: "row" }, [
           el("button", {
             type: "button",
+            text: "Open board",
+            onclick: () => vscode.postMessage({ type: "openBoard" }),
+          }),
+          el("button", {
+            type: "button",
             class: "secondary",
-            text: "Open map",
+            text: "Open team map",
             onclick: () => vscode.postMessage({ type: "openMap" }),
           }),
-          el("button", { type: "button", class: "secondary", text: "Collapse all", onclick: () => setAllFolds(false) }),
-          el("button", { type: "button", class: "secondary", text: "Expand all", onclick: () => setAllFolds(true) }),
         ]),
       ]),
       renderWorkspace(state),
@@ -402,11 +475,11 @@
   }
 
   function renderAccount(state) {
-    return el("footer", {}, [
-      el("p", { class: "muted", text: state.user.email }),
+    return el("footer", { class: "account" }, [
+      el("span", { class: "muted", text: state.user.email }),
       el("button", {
         type: "button",
-        class: "secondary",
+        class: "link",
         text: "Log out",
         onclick: () => vscode.postMessage({ type: "signOut" }),
       }),
