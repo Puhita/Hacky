@@ -444,6 +444,14 @@ test("the openMap message asks the editor to open the map", async () => {
   assert.equal(viewer.last().error, null);
 });
 
+test("the openBoard message asks the editor to open the board", async () => {
+  let opened = 0;
+  const viewer = sidebar("alice", workspace, { openBoard: () => (opened += 1) });
+  await viewer.controller.handle({ type: "openBoard" });
+  assert.equal(opened, 1);
+  assert.equal(viewer.last().error, null);
+});
+
 test("logging out returns to the login screen", async () => {
   const leaver = sidebar("leaver");
   await leaver.controller.handle({ type: "signIn", ...(await createConfirmedUser("leaver")) });

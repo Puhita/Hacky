@@ -62,16 +62,37 @@ test("asks the extension for state on load", () => {
 });
 
 test("logging in sends the typed values, and empty fields send nothing", () => {
-  const { sent, send, root, button } = mount();
+  const { sent, send, root, button, window } = mount();
   send(SIGNED_OUT);
-  button("Log in").click();
-  assert.equal(sent.length, 1);
-  root.querySelector('[name="email"]').value = "a@example.com";
-  root.querySelector('[name="password"]').value = "secret";
-  button("Log in").click();
+  const type = (name: string, value: string) => {
+    const input = root.querySelector(`[name="${name}"]`);
+    input.value = value;
+    input.dispatchEvent(new window.Event("input"));
+  };
+  button("Log in to Hacky").click();
+  assert.equal(sent.length, 1, "empty fields send nothing");
+  type("email", "a@example.com");
+  type("password", "secret");
+  button("Log in to Hacky").click();
   assert.deepEqual(sent[1], { type: "signIn", email: "a@example.com", password: "secret" });
+
+  // Signing up is the other tab of the same form, and keeps what was typed.
+  button("Sign up").click();
+  assert.equal(root.querySelector('[name="email"]').value, "a@example.com");
+  assert.equal(button("Log in to Hacky"), undefined);
   button("Create account").click();
   assert.deepEqual(sent[2], { type: "signUp", email: "a@example.com", password: "secret" });
+});
+
+test("the password can be shown and hidden", () => {
+  const { send, root, button } = mount();
+  send(SIGNED_OUT);
+  const password = root.querySelector('[name="password"]');
+  assert.equal(password.type, "password");
+  button("Show").click();
+  assert.equal(password.type, "text");
+  button("Hide").click();
+  assert.equal(password.type, "password");
 });
 
 test("shows team choices when signed in without a team", () => {
@@ -177,7 +198,7 @@ test("an out-of-date folder offers Update setup, which sends the same connect me
 test("an assumption can be confirmed, or rejected with a reason", () => {
   const { sent, send, root, button } = mount();
   send({ ...IN_TEAM, assumptions: [ASSUMPTION] });
-  assert.match(root.textContent, /Assumptions \(1\)/);
+  assert.match(root.textContent, /Assumptions\s*1/);
   assert.match(root.textContent, /10% off/);
   assert.match(root.textContent, /Assumed by Bob, for: What discount\?/);
   button("Confirm").click();
@@ -193,7 +214,7 @@ test("an assumption can be confirmed, or rejected with a reason", () => {
 test("a decision can be replaced or withdrawn, and its controls stay open through a refresh", () => {
   const { sent, send, root, button, window } = mount();
   send({ ...IN_TEAM, decisions: [DECISION] });
-  assert.match(root.textContent, /Decisions \(1\)/);
+  assert.match(root.textContent, /Decisions\s*1/);
   assert.match(root.textContent, /Decided by Alice\./);
   const details = root.querySelector("details.actions");
   assert.equal(details.open, false, "collapsed, since these notify the whole team");
@@ -214,30 +235,35 @@ test("a decision can be replaced or withdrawn, and its controls stay open throug
   assert.deepEqual(sent[2], { type: "withdrawDecision", decisionId: "d1" });
 });
 
-test("every section and card can be folded, and Collapse all and Expand all fold them together", () => {
-  const { send, root, button, window } = mount();
+test("every section and card can be folded, and each fold keeps its own choice", () => {
+  const { send, root, window } = mount();
   const state = { ...IN_TEAM, inbox: [QUESTION], assumptions: [ASSUMPTION], decisions: [DECISION] };
   send(state);
   const folds = () => [...root.querySelectorAll("details.section-fold, details.card-fold")] as any[];
+  const named = (title: string) => folds().find((node) => node.textContent.startsWith(title));
   assert.ok(folds().length >= 8, "each section and each card has a fold");
-  assert.equal(root.querySelector("details.section-fold").nextElementSibling, null, "a section is one fold, not a loose heading");
+  assert.equal(root.querySelector("details.section-fold").parentElement.className, "panel", "a section is one boxed fold");
 
-  const inbox = folds().find((node) => node.textContent.includes("Inbox"));
-  assert.equal(inbox.open, true);
-  assert.equal(folds().find((node) => node.textContent.startsWith("Live feed")).open, false, "the feed starts folded");
+  assert.equal(named("Inbox").open, true, "a section with something waiting starts open");
+  assert.equal(named("Agent questions").open, false, "an empty section starts folded");
+  assert.equal(named("Decisions").open, false, "settled decisions start folded");
+  assert.equal(named("Live feed").open, false, "the feed starts folded");
+  assert.match(named("Inbox").querySelector(".count").textContent, /^1$/, "the count is a badge on the title");
   assert.equal(root.querySelector(".card-title").textContent, "What discount?", "a card's headline is on its summary line");
 
-  button("Collapse all").click();
-  assert.ok(folds().every((node) => !node.open));
+  named("Inbox").open = false;
+  named("Inbox").dispatchEvent(new window.Event("toggle"));
   send(state);
-  assert.ok(folds().every((node) => !node.open), "stays folded through a refresh");
-  button("Expand all").click();
-  assert.ok(folds().every((node) => node.open));
+  assert.equal(named("Inbox").open, false, "a folded section stays folded through a refresh");
+  assert.equal(named("Assumptions").open, true, "the other sections are untouched");
+});
 
-  folds()[0].open = false;
-  folds()[0].dispatchEvent(new window.Event("toggle"));
-  send(state);
-  assert.equal(folds()[0].open, false, "one fold keeps its own choice");
+test("the sidebar has buttons for the board and the map", () => {
+  const { sent, send, button } = mount();
+  send(IN_TEAM);
+  button("Open board").click();
+  button("Open team map").click();
+  assert.deepEqual(sent.slice(1), [{ type: "openBoard" }, { type: "openMap" }]);
 });
 
 test("the task board groups tasks by status, and a task can be added", () => {
@@ -291,7 +317,7 @@ test("a teammate's agent question can be answered from the sidebar, and answered
       { ...INCOMING, id: "p3", direction: "outgoing", question: "Who owns auth?" },
     ],
   });
-  assert.match(root.textContent, /Agent questions \(1\)/);
+  assert.match(root.textContent, /Agent questions\s*1/);
   assert.match(root.textContent, /Orlin's agent asks/);
   assert.match(root.textContent, /Which fields does \/users return\?/);
   assert.match(root.textContent, /Your agent asked Orlin/);

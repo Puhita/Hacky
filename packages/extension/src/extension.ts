@@ -16,6 +16,7 @@ class HackyUi {
   private controller: SidebarController | undefined;
   private readonly webviews = new Set<vscode.Webview>();
   private mapPanel: vscode.WebviewPanel | undefined;
+  private boardPanel: vscode.WebviewPanel | undefined;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -40,6 +41,7 @@ class HackyUi {
         });
       },
       openMap: () => this.openMap(),
+      openBoard: () => this.openBoard(),
     });
   }
 
@@ -81,7 +83,27 @@ class HackyUi {
     });
   }
 
-  html(webview: vscode.Webview, mediaUri: vscode.Uri, name: "sidebar" | "map"): string {
+  openBoard(): void {
+    if (this.boardPanel) {
+      this.boardPanel.reveal();
+      return;
+    }
+    const mediaUri = vscode.Uri.joinPath(this.context.extensionUri, "media");
+    const panel = vscode.window.createWebviewPanel("hacky.board", "Hacky Board", vscode.ViewColumn.Active, {
+      enableScripts: true,
+      localResourceRoots: [mediaUri],
+      retainContextWhenHidden: true,
+    });
+    panel.webview.html = this.html(panel.webview, mediaUri, "board");
+    const attachment = this.attach(panel.webview);
+    this.boardPanel = panel;
+    panel.onDidDispose(() => {
+      attachment.dispose();
+      this.boardPanel = undefined;
+    });
+  }
+
+  html(webview: vscode.Webview, mediaUri: vscode.Uri, name: "sidebar" | "map" | "board"): string {
     const nonce = randomBytes(16).toString("hex");
     const uri = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(mediaUri, file)).toString();
     return `<!DOCTYPE html>
@@ -101,6 +123,7 @@ class HackyUi {
 
   dispose(): void {
     this.mapPanel?.dispose();
+    this.boardPanel?.dispose();
     this.controller?.dispose();
     this.controller = undefined;
   }
@@ -132,6 +155,7 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("hacky.sidebar", new SidebarProvider(context, ui)),
     vscode.commands.registerCommand("hacky.openMap", () => ui.openMap()),
+    vscode.commands.registerCommand("hacky.openBoard", () => ui.openBoard()),
     // The link's fragment holds login tokens. They're deliberately ignored: the user logs in as usual.
     vscode.window.registerUriHandler({
       handleUri: () => {

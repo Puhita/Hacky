@@ -91,12 +91,94 @@ button.wide {
 
 section {
   margin-top: 12px;
+}
+
+/* Each section is its own box, so they read as separate blocks instead of a list of lines. */
+section.panel {
+  margin-top: 10px;
+  padding: 0 10px;
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border, #4443));
+  border-radius: 6px;
+  background: var(--vscode-editorWidget-background, transparent);
+}
+
+.section-title {
+  flex: 1;
+}
+
+.count {
+  flex: none;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-input-background, transparent);
+  font-size: 0.8em;
+  text-align: center;
+}
+
+.count.active {
+  color: var(--vscode-badge-foreground);
+  background: var(--vscode-badge-background);
+}
+
+.team-header h1 {
+  margin: 14px 0 6px;
+  font-size: 1.4em;
+}
+
+.invite {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.invite code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.9em;
+}
+
+.account {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 20px;
+  padding-top: 10px;
   border-top: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.account span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Secondary buttons get an outline, so they stay visible in themes that give them no fill. */
+button.secondary {
+  border: 1px solid var(--vscode-button-border, var(--vscode-widget-border, #8886));
+  background: var(--vscode-button-secondaryBackground, transparent);
+}
+
+/* A text-only button. */
+button.link {
+  padding: 2px 6px;
+  color: var(--vscode-textLink-foreground);
+  background: transparent;
+  font-size: 0.9em;
+}
+
+button.link:hover {
+  background: transparent;
+  text-decoration: underline;
 }
 
 /* Folding: one chevron per section and card, and a one-line headline when a card is folded. */
 details.section-fold > summary,
-details.card-fold > summary {
+details.card-fold > summary,
+details.item-fold > summary {
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -107,7 +189,8 @@ details.card-fold > summary {
 }
 
 details.section-fold > summary::-webkit-details-marker,
-details.card-fold > summary::-webkit-details-marker {
+details.card-fold > summary::-webkit-details-marker,
+details.item-fold > summary::-webkit-details-marker {
   display: none;
 }
 
@@ -119,7 +202,8 @@ details.card-fold > summary::before {
 }
 
 details[open].section-fold > summary::before,
-details[open].card-fold > summary::before {
+details[open].card-fold > summary::before,
+details[open].item-fold > summary::before {
   content: "\25BE";
 }
 
@@ -139,7 +223,8 @@ details[open].card-fold > summary::before {
   overflow-wrap: anywhere;
 }
 
-details[open].card-fold > summary > .card-title {
+details[open].card-fold > summary > .card-title,
+details[open].item-fold > summary > .card-title {
   white-space: normal;
 }
 
@@ -147,12 +232,120 @@ details[open].card-fold > summary > .card-title {
   padding-bottom: 6px;
 }
 
-details.card-fold > .fold-body {
+.card-title.plain {
+  font-weight: 400;
+}
+
+details.card-fold > .fold-body,
+details.item-fold > .fold-body {
   padding-left: 14px;
 }
 
 .row button {
   margin-bottom: 8px;
+}
+
+/* Log in and Sign up */
+section.auth {
+  margin-top: 0;
+  border-top: none;
+}
+
+.brand {
+  padding: 24px 0 16px;
+  text-align: center;
+}
+
+.brand h1 {
+  margin: 8px 0 4px;
+  font-size: 1.5em;
+}
+
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+.tabs {
+  display: flex;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.tab {
+  flex: 1;
+  margin: 0;
+  padding: 8px 0;
+  border-bottom: 2px solid transparent;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+}
+
+.tab:hover {
+  color: var(--vscode-foreground);
+  background: transparent;
+}
+
+.tab.selected {
+  border-bottom-color: var(--vscode-focusBorder, var(--vscode-button-background));
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
+.field {
+  position: relative;
+  margin-bottom: 12px;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 0.9em;
+  font-weight: 600;
+}
+
+.field input {
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+
+.field input:focus,
+.tab:focus-visible,
+button:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.field button.link {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  margin: 0;
+  font-size: 0.85em;
+}
+
+button.primary {
+  margin-top: 4px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+
+.auth-hint {
+  margin-top: 12px;
+  text-align: center;
+}
+
+/* Team choice after logging in */
+input {
+  border-radius: 4px;
 }
 
 .badge {

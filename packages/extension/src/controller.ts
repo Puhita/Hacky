@@ -58,7 +58,8 @@ export type Message =
   | { type: "withdrawDecision"; decisionId: string }
   | { type: "addTask"; title: string }
   | { type: "answerTeammate"; questionId: string; text: string }
-  | { type: "openMap" };
+  | { type: "openMap" }
+  | { type: "openBoard" };
 
 export type ControllerOptions = {
   api: HackyApi;
@@ -76,6 +77,8 @@ export type ControllerOptions = {
   notify?: (message: string) => void;
   // Opens the Hacky Map in an editor tab.
   openMap?: () => void;
+  // Opens the Hacky Board (tasks, messages, team, activity) in an editor tab.
+  openBoard?: () => void;
 };
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -185,6 +188,9 @@ export class SidebarController {
         return;
       case "openMap":
         this.options.openMap?.();
+        return;
+      case "openBoard":
+        this.options.openBoard?.();
         return;
     }
   }
