@@ -156,6 +156,19 @@ test("the connect button shows what will be written, and goes away once connecte
   assert.match(root.textContent, /This folder is connected\./);
 });
 
+test("an out-of-date folder offers Update setup, which sends the same connect message", () => {
+  const { sent, send, root, button } = mount();
+  send({ ...IN_TEAM, workspace: "outdated" });
+  assert.match(root.textContent, /older version/);
+  assert.match(root.textContent, /hacky:start/);
+  assert.equal(button("Connect this folder"), undefined);
+  button("Update setup").click();
+  assert.deepEqual(sent.at(-1), { type: "connectWorkspace" });
+  send({ ...IN_TEAM, workspace: "connected" });
+  assert.equal(button("Update setup"), undefined);
+  assert.match(root.textContent, /This folder is connected\./);
+});
+
 test("an assumption can be confirmed, or rejected with a reason", () => {
   const { sent, send, root, button } = mount();
   send({ ...IN_TEAM, assumptions: [ASSUMPTION] });

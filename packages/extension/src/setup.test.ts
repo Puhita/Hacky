@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
-import { connectedTeamId, connectWorkspace, MANAGED_BLOCK } from "./setup.js";
+import { connectedTeamId, connectWorkspace, managedBlockIsCurrent, MANAGED_BLOCK } from "./setup.js";
 
 const CONFIG = { supabaseUrl: "https://x.supabase.co", publishableKey: "sb_publishable_x", teamId: "team-1" };
 let dir: string;
@@ -96,4 +96,29 @@ test("refuses a broken settings file before writing anything", () => {
 
 test("a folder with no setup isn't connected", () => {
   assert.equal(connectedTeamId(dir), null);
+});
+
+test("the managed block is current after connecting, with the user's own text around it", () => {
+  writeFileSync(join(dir, "CLAUDE.md"), "My own notes\n");
+  connectWorkspace(dir, CONFIG, "linux");
+  assert.equal(managedBlockIsCurrent(dir), true);
+  writeFileSync(join(dir, "CLAUDE.md"), `Before\n\n${MANAGED_BLOCK}\n\nAfter\n`);
+  assert.equal(managedBlockIsCurrent(dir), true, "text outside the markers doesn't matter");
+});
+
+test("an older block, a missing block and a missing file are all out of date", () => {
+  assert.equal(managedBlockIsCurrent(dir), false, "no CLAUDE.md");
+  writeFileSync(join(dir, "CLAUDE.md"), "Just my notes\n");
+  assert.equal(managedBlockIsCurrent(dir), false, "no block");
+  writeFileSync(join(dir, "CLAUDE.md"), "<!-- hacky:start -->\nold text\n<!-- hacky:end -->\n");
+  assert.equal(managedBlockIsCurrent(dir), false, "an older block");
+  writeFileSync(join(dir, "CLAUDE.md"), `${MANAGED_BLOCK.replace("<!-- hacky:end -->", "")}\n`);
+  assert.equal(managedBlockIsCurrent(dir), false, "no end marker");
+});
+
+test("connecting again brings an older block up to date and keeps the rest", () => {
+  writeFileSync(join(dir, "CLAUDE.md"), "Before\n\n<!-- hacky:start -->\nold text\n<!-- hacky:end -->\n\nAfter\n");
+  connectWorkspace(dir, CONFIG, "linux");
+  assert.equal(managedBlockIsCurrent(dir), true);
+  assert.equal(read("CLAUDE.md"), `Before\n\n${MANAGED_BLOCK}\n\nAfter\n`);
 });

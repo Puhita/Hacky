@@ -1,7 +1,7 @@
 // Drives the sidebar controller against the linked Supabase project.
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
@@ -116,6 +116,23 @@ test("connecting writes the workspace files for this team", async () => {
   const mcp = JSON.parse(readFileSync(join(workspace, ".mcp.json"), "utf8"));
   assert.equal(mcp.mcpServers.hacky.env.HACKY_TEAM_ID, alice.last().team!.id);
   assert.ok(!readFileSync(join(workspace, ".mcp.json"), "utf8").includes(SUPABASE_SECRET_KEY));
+});
+
+test("a folder with an older Hacky block shows as outdated until it is updated", async () => {
+  const claudeFile = join(workspace, "CLAUDE.md");
+  const current = readFileSync(claudeFile, "utf8");
+  writeFileSync(claudeFile, `My notes\n\n<!-- hacky:start -->\nold text\n<!-- hacky:end -->\n`);
+  await alice.controller.refresh();
+  assert.equal(alice.last().workspace, "outdated");
+
+  await alice.controller.handle({ type: "connectWorkspace" });
+  assert.equal(alice.last().error, null);
+  assert.equal(alice.last().workspace, "connected");
+  const updated = readFileSync(claudeFile, "utf8");
+  assert.ok(updated.startsWith("My notes\n\n"), "the person's own text is kept");
+  assert.equal(updated.match(/<!-- hacky:start -->/g)!.length, 1);
+  assert.ok(!updated.includes("old text"));
+  assert.equal(updated, `My notes\n\n${current.slice(current.indexOf("<!-- hacky:start -->"))}`);
 });
 
 test("connecting with no folder open explains the problem", async () => {

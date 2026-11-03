@@ -100,24 +100,28 @@
     none: "Open a folder to connect it to this team.",
     not_connected: "This folder isn't connected yet.",
     connected: "This folder is connected.",
+    outdated: "This folder is connected, but the Hacky instructions in its CLAUDE.md are from an older version.",
     other_team: "This folder is connected to a different team.",
   };
 
   function renderWorkspace(state) {
-    const canConnect = state.workspace === "not_connected" || state.workspace === "other_team";
+    const outdated = state.workspace === "outdated";
+    const canConnect = state.workspace === "not_connected" || state.workspace === "other_team" || outdated;
     return section("Workspace", [
       el("p", { text: WORKSPACE_TEXT[state.workspace] }),
       canConnect
         ? el("p", {
             class: "muted",
-            text: "This writes .mcp.json and a block in CLAUDE.md, and allows the Hacky tools in .claude/settings.local.json.",
+            text: outdated
+              ? "Updating replaces only the block between the hacky:start and hacky:end markers in CLAUDE.md. Start a new Claude Code chat afterwards."
+              : "This writes .mcp.json and a block in CLAUDE.md, and allows the Hacky tools in .claude/settings.local.json.",
           })
         : null,
       canConnect
         ? el("button", {
             type: "button",
             class: "wide",
-            text: "Connect this folder",
+            text: outdated ? "Update setup" : "Connect this folder",
             onclick: () => vscode.postMessage({ type: "connectWorkspace" }),
           })
         : null,

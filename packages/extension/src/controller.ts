@@ -12,7 +12,7 @@ import type {
   PulseMember,
   Team,
 } from "./api.js";
-import { connectedTeamId, connectWorkspace } from "./setup.js";
+import { connectedTeamId, connectWorkspace, managedBlockIsCurrent } from "./setup.js";
 
 const REFRESH_DEBOUNCE_MS = 300;
 // Realtime can drop silently, so the sidebar also refreshes on a timer.
@@ -21,7 +21,8 @@ const DIGEST_CHECK_MS = 60_000;
 // The sidebar's pulse shows the last hour, whatever the digest cadence is.
 const PULSE_WINDOW_MS = 60 * 60_000;
 
-export type WorkspaceStatus = "none" | "not_connected" | "connected" | "other_team";
+// outdated: connected to this team, but the Hacky block in CLAUDE.md is from an older version.
+export type WorkspaceStatus = "none" | "not_connected" | "connected" | "outdated" | "other_team";
 
 export type SidebarState = {
   user: { email: string } | null;
@@ -239,7 +240,8 @@ export class SidebarController {
     if (!dir) return "none";
     const connected = connectedTeamId(dir);
     if (!connected) return "not_connected";
-    return connected === team?.id ? "connected" : "other_team";
+    if (connected !== team?.id) return "other_team";
+    return managedBlockIsCurrent(dir) ? "connected" : "outdated";
   }
 
   private syncSubscription(teamId: string | undefined): void {

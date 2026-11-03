@@ -104,6 +104,21 @@ export function connectWorkspace(dir: string, config: ConnectionConfig, platform
   writeFileSync(claudeFile, withManagedBlock(existing));
 }
 
+// Whether CLAUDE.md holds this version's Hacky block. An upgrade changes the block, and
+// connecting again is what refreshes it, so this is how the sidebar knows to offer that.
+export function managedBlockIsCurrent(dir: string): boolean {
+  let text: string;
+  try {
+    text = readFileSync(join(dir, "CLAUDE.md"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  const start = text.indexOf(BLOCK_START);
+  const end = text.indexOf(BLOCK_END);
+  return start !== -1 && end > start && text.slice(start, end + BLOCK_END.length) === MANAGED_BLOCK;
+}
+
 export function connectedTeamId(dir: string): string | null {
   try {
     return readJson(join(dir, ".mcp.json")).mcpServers?.[SERVER_NAME]?.env?.HACKY_TEAM_ID ?? null;
