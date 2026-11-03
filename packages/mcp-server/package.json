@@ -1,6 +1,6 @@
 {
   "name": "hacky-mcp-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MCP server for Hacky: a shared memory, task board and question queue for a team's AI coding agents.",
   "license": "MIT",
   "type": "module",
