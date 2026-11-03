@@ -111,19 +111,21 @@ textarea:focus {
   padding: 5px 12px;
   border: none;
   border-radius: 4px;
-  color: var(--vscode-button-foreground);
-  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground, #fff);
+  background: var(--vscode-button-background, #0e639c);
   cursor: pointer;
 }
 
 .toolbar button:hover,
 .card button:hover {
-  background: var(--vscode-button-hoverBackground);
+  background: var(--vscode-button-hoverBackground, #1177bb);
 }
 
-button.secondary {
+.toolbar button.secondary,
+.card button.secondary,
+.group button.secondary {
   border: 1px solid var(--vscode-button-border, var(--vscode-widget-border, #8886));
-  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  color: var(--vscode-foreground);
   background: var(--vscode-button-secondaryBackground, transparent);
 }
 
@@ -161,19 +163,25 @@ textarea {
   resize: vertical;
 }
 
+/* Filter switch: the chosen option is blue, the other is grey, so they differ by colour alone. */
 .toolbar button.chip {
   margin: 0;
-  padding: 3px 12px;
-  border: 1px solid var(--vscode-widget-border, #8886);
+  padding: 3px 14px;
+  border: 1px solid transparent;
   border-radius: 12px;
   color: var(--vscode-foreground);
-  background: transparent;
+  background: rgba(128, 128, 128, 0.25);
+}
+
+.toolbar button.chip:hover {
+  background: rgba(128, 128, 128, 0.4);
 }
 
 .toolbar button.chip.selected {
-  border-color: transparent;
-  color: var(--vscode-badge-foreground);
-  background: var(--vscode-badge-background);
+  border-color: var(--vscode-focusBorder, #3794ff);
+  color: var(--vscode-button-foreground, #fff);
+  background: var(--vscode-button-background, #0e639c);
+  font-weight: 600;
 }
 
 /* Cards and badges */
@@ -336,4 +344,11 @@ details[open].fold > summary > .headline {
   padding: 6px 10px;
   border: 1px solid var(--vscode-inputValidation-infoBorder);
   background: var(--vscode-inputValidation-infoBackground);
+}
+
+/* Hover that works on any theme: a light tint over whatever the button's colour is. */
+.toolbar button:not(.chip):hover,
+.card button:hover,
+.group button:hover {
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.14);
 }

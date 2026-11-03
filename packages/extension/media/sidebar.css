@@ -51,15 +51,16 @@ textarea {
 button {
   margin: 4px 4px 4px 0;
   padding: 4px 10px;
-  border: none;
-  color: var(--vscode-button-foreground);
-  background: var(--vscode-button-background);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--vscode-button-foreground, #fff);
+  background: var(--vscode-button-background, #0e639c);
   font: inherit;
   cursor: pointer;
 }
 
 button:hover {
-  background: var(--vscode-button-hoverBackground);
+  background: var(--vscode-button-hoverBackground, #1177bb);
 }
 
 button.secondary {
@@ -159,7 +160,23 @@ section.panel {
 /* Secondary buttons get an outline, so they stay visible in themes that give them no fill. */
 button.secondary {
   border: 1px solid var(--vscode-button-border, var(--vscode-widget-border, #8886));
+  color: var(--vscode-foreground);
   background: var(--vscode-button-secondaryBackground, transparent);
+}
+
+button.secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground, rgba(128, 128, 128, 0.2));
+}
+
+/* The two header buttons share the row equally. */
+.team-header .row {
+  gap: 6px;
+}
+
+.team-header .row button {
+  flex: 1;
+  margin: 0 0 8px;
+  border: 1px solid var(--vscode-focusBorder, #3794ff);
 }
 
 /* A text-only button. */
@@ -387,4 +404,10 @@ summary {
 
 footer {
   margin-top: 20px;
+}
+
+/* Hover that works on any theme: a light tint over whatever the button's colour is, even when the
+   theme's own hover colour is missing or the same as the normal one. */
+button:not(.link):not(.tab):hover {
+  box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.14);
 }
