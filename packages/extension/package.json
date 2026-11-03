@@ -18,6 +18,12 @@
     "onUri"
   ],
   "contributes": {
+    "commands": [
+      {
+        "command": "hacky.openMap",
+        "title": "Hacky: Open Map"
+      }
+    ],
     "configuration": {
       "title": "Hacky",
       "properties": {

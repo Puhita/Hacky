@@ -11,6 +11,8 @@ const PEER_THREAD_LIMIT = 20;
 // Matches the MCP server: a chat that hasn't touched Hacky for this long counts as idle.
 const ACTIVE_WINDOW_MS = 10 * 60_000;
 const PULSE_LATEST = 3;
+// The map shows chats seen, and questions asked, within this long, plus anything still open.
+const MAP_WINDOW_MS = 60 * 60_000;
 
 // Where the confirmation email's link lands. It opens the user's editor, so nothing has to be
 // hosted. Each URL must be in the project's allowed redirects, see supabase/config.toml.
@@ -50,6 +52,42 @@ export type PulseMember = {
   updates: number;
   latest: string[];
 };
+
+// What the Hacky Map draws: the people on a team, their agent chats, and the questions open between them.
+export type MapOwner = { id: string; name: string; me: boolean };
+export type MapChat = {
+  id: string;
+  ownerId: string;
+  // active: not closed and seen recently. idle: not closed but quiet. ended: closed.
+  state: "active" | "idle" | "ended";
+  focus: string | null;
+  // Title of the task the chat is on.
+  task: string | null;
+  lastProgressAt: string | null;
+  lastSeenAt: string;
+  startedAt: string;
+  // The earlier chat this one took over, when that chat is on the map too.
+  resumedFrom: string | null;
+};
+export type MapThread = {
+  id: string;
+  // question: a team question. assumption: an agent working on a guess. agent: a question between two people's agents.
+  kind: "question" | "assumption" | "agent";
+  askerId: string;
+  // The chat that asked, when known. Empty once the answer has been collected, since the wait is then removed.
+  chatId: string | null;
+  // Who it is routed to. Null means the whole team.
+  toId: string | null;
+  text: string;
+  context: string | null;
+  status: "open" | "answered";
+  answer: string | null;
+  waiting: number;
+  createdAt: string;
+  // The signed-in person can answer it here. Assumptions are confirmed or rejected in the sidebar, so never.
+  mine: boolean;
+};
+export type MapState = { project: string; owners: MapOwner[]; chats: MapChat[]; threads: MapThread[] };
 
 function unwrap<T>({ data, error }: { data: T; error: { message: string } | null }): NonNullable<T> {
   if (error) throw new Error(error.message);
@@ -349,6 +387,136 @@ export class HackyApi {
         latest: mine.slice(0, PULSE_LATEST).map((event) => event.summary),
       };
     });
+  }
+
+  // The picture for the Hacky Map. Questions between agents are private to the two people, so
+  // only the ones involving the signed-in person appear.
+  async mapState(teamId: string): Promise<MapState> {
+    const user = await this.currentUser();
+    const meId = user?.id;
+    const windowStart = new Date(Date.now() - MAP_WINDOW_MS).toISOString();
+    const [team, names, sessions, tasks, questions, assumptions, peers] = await Promise.all([
+      this.supabase.from("teams").select("name").eq("id", teamId).single().then(unwrap),
+      this.memberNames(teamId),
+      this.supabase
+        .from("agent_sessions")
+        .select("id, user_id, focus, task_id, started_at, last_seen_at, last_progress_at, closed_at, resumed_by")
+        .eq("team_id", teamId)
+        .gte("last_seen_at", windowStart)
+        .order("started_at", { ascending: true })
+        .then(unwrap),
+      this.supabase.from("tasks").select("id, title").eq("team_id", teamId).limit(TASK_LIMIT).then(unwrap),
+      this.supabase
+        .from("questions")
+        .select("id, text, context, asked_by, routed_to, status, created_at, decisions(text), question_waiters(user_id, session_id)")
+        .eq("team_id", teamId)
+        .or(`status.eq.open,created_at.gte.${windowStart}`)
+        .order("created_at", { ascending: true })
+        .then(unwrap),
+      this.supabase
+        .from("assumptions")
+        .select("id, user_id, text, created_at, questions!inner(text, status, routed_to)")
+        .eq("team_id", teamId)
+        .eq("status", "pending")
+        .eq("questions.status", "open")
+        .order("created_at", { ascending: true })
+        .then(unwrap),
+      this.supabase
+        .from("peer_questions")
+        .select("id, from_user, from_session, to_user, question, context, status, answer, created_at")
+        .eq("team_id", teamId)
+        .or(`status.eq.open,created_at.gte.${windowStart}`)
+        .order("created_at", { ascending: true })
+        .then(unwrap),
+    ]);
+
+    const taskTitles = new Map(tasks.map((task) => [task.id, task.title as string]));
+    const known = new Set(sessions.map((session) => session.id));
+    // Sessions are oldest first, so when a chat took over several, the latest one wins.
+    const tookOver = new Map<string, string>();
+    for (const session of sessions) {
+      if (session.resumed_by && known.has(session.resumed_by)) tookOver.set(session.resumed_by, session.id);
+    }
+
+    const chats: MapChat[] = sessions.map((session) => ({
+      id: session.id,
+      ownerId: session.user_id,
+      state:
+        session.closed_at !== null
+          ? "ended"
+          : Date.now() - Date.parse(session.last_seen_at) <= ACTIVE_WINDOW_MS
+            ? "active"
+            : "idle",
+      focus: session.focus,
+      task: session.task_id ? (taskTitles.get(session.task_id) ?? null) : null,
+      lastProgressAt: session.last_progress_at,
+      lastSeenAt: session.last_seen_at,
+      startedAt: session.started_at,
+      resumedFrom: tookOver.get(session.id) ?? null,
+    }));
+
+    const threads: MapThread[] = [];
+    for (const row of questions) {
+      const waiters = row.question_waiters as { user_id: string; session_id: string }[];
+      // One decision per question, but the client's types can't tell, so accept either shape.
+      const embedded = row.decisions as unknown as { text: string } | { text: string }[] | null;
+      const decision = Array.isArray(embedded) ? (embedded[0] ?? null) : embedded;
+      threads.push({
+        id: row.id,
+        kind: "question",
+        askerId: row.asked_by,
+        chatId: waiters.find((waiter) => waiter.user_id === row.asked_by)?.session_id ?? null,
+        toId: row.routed_to,
+        text: row.text,
+        context: row.context,
+        status: row.status,
+        answer: decision?.text ?? null,
+        waiting: waiters.length,
+        createdAt: row.created_at,
+        mine: row.status === "open" && (row.routed_to === null || row.routed_to === meId),
+      });
+    }
+    for (const row of assumptions) {
+      const question = row.questions as unknown as { text: string; routed_to: string | null };
+      threads.push({
+        id: row.id,
+        kind: "assumption",
+        askerId: row.user_id,
+        chatId: null,
+        toId: question.routed_to,
+        text: row.text,
+        context: question.text,
+        status: "open",
+        answer: null,
+        waiting: 0,
+        createdAt: row.created_at,
+        mine: false,
+      });
+    }
+    for (const row of peers) {
+      threads.push({
+        id: row.id,
+        kind: "agent",
+        askerId: row.from_user,
+        chatId: row.from_session,
+        toId: row.to_user,
+        text: row.question,
+        context: row.context,
+        status: row.status,
+        answer: row.answer,
+        waiting: row.status === "open" ? 1 : 0,
+        createdAt: row.created_at,
+        mine: row.status === "open" && row.to_user === meId,
+      });
+    }
+    threads.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+    return {
+      project: team.name,
+      owners: [...names].map(([id, name]) => ({ id, name, me: id === meId })),
+      chats,
+      threads,
+    };
   }
 
   // Calls onChange whenever a teammate or agent changes anything the sidebar shows.

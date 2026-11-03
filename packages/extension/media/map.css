@@ -1,0 +1,378 @@
+:root {
+  --map-question: var(--vscode-charts-blue, #3794ff);
+  --map-assumption: var(--vscode-charts-yellow, #cca700);
+  --map-agent: var(--vscode-charts-purple, #b180d7);
+  --map-active: var(--vscode-charts-green, #89d185);
+  --map-muted: var(--vscode-descriptionForeground);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+  background: var(--vscode-editor-background);
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--vscode-panel-border, transparent);
+}
+
+h1 {
+  flex: 1;
+  margin: 0;
+  font-size: 1.2em;
+  font-weight: 600;
+}
+
+button {
+  padding: 4px 12px;
+  border: none;
+  cursor: pointer;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+button:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+
+button.secondary {
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+}
+
+button.secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.legend {
+  display: flex;
+  gap: 12px;
+  color: var(--map-muted);
+}
+
+.key::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.key.question,
+.tag-question {
+  color: var(--map-question);
+}
+
+.key.assumption {
+  color: var(--map-assumption);
+}
+
+.key.agent {
+  color: var(--map-agent);
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.scene {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: var(--map-muted);
+}
+
+.empty[hidden] {
+  display: none;
+}
+
+/* Scene */
+.project {
+  fill: var(--vscode-button-background);
+  stroke: var(--vscode-focusBorder, transparent);
+  stroke-width: 2;
+}
+
+.person {
+  fill: var(--vscode-badge-background);
+  stroke: var(--vscode-panel-border, var(--map-muted));
+  stroke-width: 1.5;
+}
+
+.person.me {
+  stroke: var(--vscode-focusBorder, var(--map-active));
+  stroke-width: 3;
+}
+
+.orbit {
+  fill: none;
+  stroke: var(--vscode-panel-border, var(--map-muted));
+  stroke-dasharray: 2 5;
+  opacity: 0.5;
+}
+
+.label {
+  fill: var(--vscode-badge-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.project-label {
+  fill: var(--vscode-button-foreground);
+}
+
+.caption {
+  fill: var(--map-muted);
+  font-size: 10px;
+  pointer-events: none;
+}
+
+.edge {
+  stroke: var(--vscode-panel-border, var(--map-muted));
+  stroke-width: 1;
+  opacity: 0.6;
+}
+
+.chat {
+  stroke: var(--vscode-editor-background);
+  stroke-width: 2;
+}
+
+.chat.active {
+  fill: var(--map-active);
+  animation: glow 2.4s ease-in-out infinite;
+}
+
+.chat.idle {
+  fill: var(--map-muted);
+  opacity: 0.55;
+}
+
+.chat.ended {
+  fill: var(--map-muted);
+  opacity: 0.2;
+}
+
+.chat-caption.idle {
+  opacity: 0.6;
+}
+
+.chat-caption.ended {
+  opacity: 0.3;
+}
+
+.edge.chat-edge.ended {
+  opacity: 0.15;
+}
+
+.flow {
+  stroke: var(--map-agent);
+  stroke-width: 2;
+  stroke-dasharray: 6 6;
+  animation: flow 1s linear infinite;
+}
+
+/* Transient effects */
+.fx-line {
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 8 6;
+  animation: send 1.8s ease-out forwards;
+}
+
+.fx-line.question {
+  stroke: var(--map-question);
+}
+
+.fx-line.assumption {
+  stroke: var(--map-assumption);
+}
+
+.fx-line.agent {
+  stroke: var(--map-agent);
+}
+
+.fx-line.answer,
+.fx-line.handoff {
+  stroke: var(--map-active);
+}
+
+.fx-pulse {
+  fill: none;
+  stroke: var(--map-active);
+  stroke-width: 2;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ring 1.4s ease-out forwards;
+}
+
+.fx-pulse.ended {
+  stroke: var(--map-muted);
+}
+
+/* Cards */
+.cards {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.card {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  pointer-events: auto;
+  border: 1px solid var(--vscode-panel-border, transparent);
+  border-left-width: 4px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  transition: opacity 0.5s, transform 0.5s;
+}
+
+.card.question {
+  border-left-color: var(--map-question);
+}
+
+.card.assumption {
+  border-left-color: var(--map-assumption);
+}
+
+.card.agent {
+  border-left-color: var(--map-agent);
+}
+
+.card.entering {
+  animation: pop 0.45s ease-out;
+}
+
+.card.answered {
+  border-left-color: var(--map-active);
+}
+
+.card.collapsing {
+  opacity: 0;
+  transform: scale(0.85);
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--map-muted);
+  font-size: 0.85em;
+}
+
+.tag {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.card-text {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+.card-context,
+.card-answer {
+  margin: 2px 0;
+  color: var(--map-muted);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+
+.card-answer {
+  color: var(--vscode-foreground);
+}
+
+.card .row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.card input {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 3px 6px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+}
+
+@keyframes glow {
+  50% {
+    opacity: 0.65;
+  }
+}
+
+@keyframes flow {
+  to {
+    stroke-dashoffset: -12;
+  }
+}
+
+@keyframes send {
+  from {
+    stroke-dashoffset: 60;
+    opacity: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+    opacity: 0;
+  }
+}
+
+@keyframes ring {
+  from {
+    transform: scale(0.5);
+    opacity: 1;
+  }
+  to {
+    transform: scale(3);
+    opacity: 0;
+  }
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

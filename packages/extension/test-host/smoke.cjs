@@ -15,4 +15,15 @@ exports.run = async function run() {
 
   assert.equal(extension.isActive, true, "opening the sidebar activates the extension");
   console.log("Sidebar opened and the extension activated.");
+
+  const mapTabs = () =>
+    vscode.window.tabGroups.all.flatMap((group) => group.tabs).filter((tab) => tab.input?.viewType?.endsWith("hacky.map"));
+  assert.equal(mapTabs().length, 0, "no map tab before the command runs");
+  await vscode.commands.executeCommand("hacky.openMap");
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  assert.equal(mapTabs().length, 1, "the command opens the map in an editor tab");
+  await vscode.commands.executeCommand("hacky.openMap");
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(mapTabs().length, 1, "running it again shows the same tab");
+  console.log("The map opened in an editor tab, once.");
 };

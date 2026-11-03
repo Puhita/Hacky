@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { createClient } from "@supabase/supabase-js";
 import { confirmationUrl, HackyApi } from "./api.js";
-import { SidebarController, type SidebarState } from "./controller.js";
+import { SidebarController, type ControllerOptions, type SidebarState } from "./controller.js";
 
 const { SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, SUPABASE_SECRET_KEY } = process.env as Record<string, string>;
 const admin = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -17,7 +17,7 @@ const userIds: string[] = [];
 const teamIds = new Set<string>();
 const disposers: (() => void | Promise<void>)[] = [];
 
-function sidebar(label: string, workspace: string | null = null) {
+function sidebar(label: string, workspace: string | null = null, extra: Partial<ControllerOptions> = {}) {
   const api = new HackyApi(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, join(tempDir, `${label}.json`));
   const states: SidebarState[] = [];
   let savedTeam: string | undefined;
@@ -29,6 +29,7 @@ function sidebar(label: string, workspace: string | null = null) {
     loadTeamId: () => savedTeam,
     saveTeamId: (teamId) => (savedTeam = teamId),
     post: (state) => states.push(state),
+    ...extra,
   });
   disposers.push(() => controller.dispose(), () => api.dispose());
   const last = () => states.at(-1)!;
@@ -316,6 +317,114 @@ test("the confirmation link goes back to the editor, for each editor the project
     const location = response.headers.get("location") ?? "";
     assert.ok(location.startsWith(`${scheme}://hacky.hacky/confirmed`), `redirected to ${location.split("#")[0]}`);
   }
+});
+
+test("the map shows people, chats, handoffs and questions, and keeps agent questions private", async () => {
+  const teamId = alice.last().team!.id;
+  const { data: members } = await admin.from("members").select("user_id, display_name").eq("team_id", teamId);
+  const idOf = (name: string) => members!.find((member) => member.display_name === name)!.user_id as string;
+  const aliceId = idOf("Alice");
+  const bobId = idOf("Bob");
+  await createConfirmedUser("carol");
+  const carolId = userIds.at(-1)!;
+  assert.ifError((await admin.from("members").insert({ team_id: teamId, user_id: carolId, display_name: "Carol", role: "member" })).error);
+
+  const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const session = async (userId: string, fields: Record<string, unknown>) => {
+    const { data, error } = await admin.from("agent_sessions").insert({ team_id: teamId, user_id: userId, ...fields }).select("id").single();
+    assert.ifError(error);
+    return data!.id as string;
+  };
+  const { data: task } = await admin.from("tasks").insert({ team_id: teamId, title: "Build the checkout" }).select("id").single();
+
+  const newChat = await session(aliceId, { focus: "Pick up the cart work", last_seen_at: minutesAgo(1) });
+  const oldChat = await session(aliceId, {
+    focus: "Cart work",
+    started_at: minutesAgo(40),
+    last_seen_at: minutesAgo(15),
+    closed_at: minutesAgo(15),
+    resumed_by: newChat,
+  });
+  const ancientChat = await session(aliceId, { started_at: minutesAgo(200), last_seen_at: minutesAgo(180) });
+  const bobChat = await session(bobId, {
+    focus: "Wire the login",
+    task_id: task!.id,
+    last_seen_at: minutesAgo(2),
+    last_progress_at: minutesAgo(1),
+  });
+  const idleChat = await session(bobId, { last_seen_at: minutesAgo(30) });
+
+  const ask = async (text: string, askedBy: string, routedTo: string | null, chat: string) => {
+    const { data, error } = await admin
+      .from("questions")
+      .insert({ team_id: teamId, text, asked_by: askedBy, routed_to: routedTo })
+      .select("id")
+      .single();
+    assert.ifError(error);
+    assert.ifError((await admin.from("question_waiters").insert({ team_id: teamId, question_id: data!.id, user_id: askedBy, session_id: chat })).error);
+    return data!.id as string;
+  };
+  const toAlice = await ask("Which payment provider?", bobId, aliceId, bobChat);
+  const toTeam = await ask("Which colour for the header?", aliceId, null, newChat);
+  const toBob = await ask("Is the API ready?", aliceId, bobId, newChat);
+  assert.ifError((await admin.from("assumptions").insert({ team_id: teamId, question_id: toAlice, user_id: bobId, text: "Stripe for now" })).error);
+  await alice.api.answer(toTeam, "Blue");
+
+  const peer = (from: string, session: string, to: string, question: string) =>
+    admin.from("peer_questions").insert({ team_id: teamId, from_user: from, from_session: session, to_user: to, question }).select("id").single();
+  const forAlice = (await peer(bobId, bobChat, aliceId, "Which fields does the cart API return?")).data!.id as string;
+  const privateOne = (await peer(bobId, bobChat, carolId, "Is the staging key ready?")).data!.id as string;
+
+  const map = await alice.api.mapState(teamId);
+  assert.equal(map.project, "Sidebar test");
+  assert.deepEqual(map.owners.map((owner) => [owner.name, owner.me]).sort(), [["Alice", true], ["Bob", false], ["Carol", false]]);
+
+  const chat = (id: string) => map.chats.find((item) => item.id === id)!;
+  assert.equal(chat(newChat).state, "active");
+  assert.equal(chat(newChat).resumedFrom, oldChat, "the taker knows whose work it took over");
+  assert.equal(chat(oldChat).state, "ended");
+  assert.equal(chat(oldChat).resumedFrom, null);
+  assert.equal(chat(idleChat).state, "idle");
+  assert.equal(chat(bobChat).state, "active");
+  assert.equal(chat(bobChat).ownerId, bobId);
+  assert.equal(chat(bobChat).focus, "Wire the login");
+  assert.equal(chat(bobChat).task, "Build the checkout");
+  assert.ok(chat(bobChat).lastProgressAt);
+  assert.ok(!map.chats.some((item) => item.id === ancientChat), "a chat gone for hours isn't drawn");
+
+  const thread = (id: string) => map.threads.find((item) => item.id === id)!;
+  assert.deepEqual(
+    { ...thread(toAlice), createdAt: "" },
+    {
+      id: toAlice, kind: "question", askerId: bobId, chatId: bobChat, toId: aliceId, text: "Which payment provider?",
+      context: null, status: "open", answer: null, waiting: 1, createdAt: "", mine: true,
+    },
+  );
+  assert.equal(thread(toTeam).status, "answered");
+  assert.equal(thread(toTeam).answer, "Blue");
+  assert.equal(thread(toTeam).toId, null);
+  assert.equal(thread(toBob).mine, false, "a question for Bob isn't Alice's to answer");
+  const assumption = map.threads.find((item) => item.kind === "assumption" && item.text === "Stripe for now")!;
+  assert.equal(assumption.askerId, bobId);
+  assert.equal(assumption.context, "Which payment provider?");
+  assert.equal(assumption.toId, aliceId);
+  assert.equal(assumption.mine, false);
+  assert.equal(thread(forAlice).kind, "agent");
+  assert.equal(thread(forAlice).chatId, bobChat);
+  assert.equal(thread(forAlice).mine, true);
+  assert.ok(!map.threads.some((item) => item.id === privateOne), "a question between Bob's and Carol's agents isn't Alice's to see");
+
+  await alice.controller.refresh();
+  assert.equal(alice.last().map.project, "Sidebar test");
+  assert.ok(alice.last().map.chats.some((item) => item.id === newChat));
+});
+
+test("the openMap message asks the editor to open the map", async () => {
+  let opened = 0;
+  const viewer = sidebar("alice", workspace, { openMap: () => (opened += 1) });
+  await viewer.controller.handle({ type: "openMap" });
+  assert.equal(opened, 1);
+  assert.equal(viewer.last().error, null);
 });
 
 test("logging out returns to the login screen", async () => {

@@ -6,6 +6,7 @@ import type {
   FeedItem,
   HackyApi,
   InboxQuestion,
+  MapState,
   PeerThread,
   PendingAssumption,
   PulseMember,
@@ -34,6 +35,8 @@ export type SidebarState = {
   feed: FeedItem[];
   pulse: PulseMember[];
   agentChat: PeerThread[];
+  // What the Hacky Map draws. Empty until the first refresh for a team.
+  map: MapState;
   notice: string | null;
   error: string | null;
 };
@@ -53,7 +56,8 @@ export type Message =
   | { type: "changeDecision"; decisionId: string; text: string }
   | { type: "withdrawDecision"; decisionId: string }
   | { type: "addTask"; title: string }
-  | { type: "answerTeammate"; questionId: string; text: string };
+  | { type: "answerTeammate"; questionId: string; text: string }
+  | { type: "openMap" };
 
 export type ControllerOptions = {
   api: HackyApi;
@@ -69,6 +73,8 @@ export type ControllerOptions = {
   saveDigestAt?: (at: number) => void;
   // Shows a message outside the sidebar, such as a VS Code notification.
   notify?: (message: string) => void;
+  // Opens the Hacky Map in an editor tab.
+  openMap?: () => void;
 };
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -176,6 +182,9 @@ export class SidebarController {
         await api.answerPeerQuestion(message.questionId, message.text.trim());
         this.notice = "Answer sent to your teammate's agent.";
         return;
+      case "openMap":
+        this.options.openMap?.();
+        return;
     }
   }
 
@@ -261,6 +270,7 @@ export class SidebarController {
       feed: [],
       pulse: [],
       agentChat: [],
+      map: { project: "", owners: [], chats: [], threads: [] },
       notice: this.notice,
       error: this.error,
     };
@@ -275,7 +285,7 @@ export class SidebarController {
         if (state.team && state.team.id !== this.teamId) this.setTeam(state.team.id);
         if (state.team) {
           state.workspace = this.workspaceStatus(state.team);
-          [state.inbox, state.assumptions, state.decisions, state.tasks, state.feed, state.pulse, state.agentChat] =
+          [state.inbox, state.assumptions, state.decisions, state.tasks, state.feed, state.pulse, state.agentChat, state.map] =
             await Promise.all([
               api.inbox(state.team.id),
               api.assumptions(state.team.id),
@@ -284,6 +294,7 @@ export class SidebarController {
               api.feed(state.team.id),
               api.pulse(state.team.id, new Date(Date.now() - PULSE_WINDOW_MS)),
               api.peerThreads(state.team.id),
+              api.mapState(state.team.id),
             ]);
           this.announceTeammateQuestions(state.agentChat);
         }

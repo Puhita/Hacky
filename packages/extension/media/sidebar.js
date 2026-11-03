@@ -334,6 +334,12 @@
           text: "Copy invite code",
           onclick: () => navigator.clipboard.writeText(state.team.invite_code),
         }),
+        el("button", {
+          type: "button",
+          class: "secondary",
+          text: "Open map",
+          onclick: () => vscode.postMessage({ type: "openMap" }),
+        }),
       ]),
       renderWorkspace(state),
       renderInbox(state),
