@@ -1,6 +1,6 @@
 // Drives the sidebar controller against the linked Supabase project.
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -140,7 +140,10 @@ test("a question and a progress update appear live in a teammate's sidebar", asy
     .select("id")
     .single();
   assert.ifError(error);
-  await bobAuth.from("question_waiters").insert({ team_id: teamId, question_id: question!.id, user_id: bobId });
+  // A wait belongs to a chat, so Bob needs a session first.
+  const sessionId = randomUUID();
+  assert.ifError((await bobAuth.rpc("start_session", { target_team: teamId, new_session: sessionId })).error);
+  assert.ifError((await bobAuth.from("question_waiters").insert({ team_id: teamId, question_id: question!.id, user_id: bobId, session_id: sessionId })).error);
   await bobAuth.from("events").insert({ team_id: teamId, user_id: bobId, summary: "Picked up theming" });
 
   // Well under the 30 second fallback timer, so this can only be Realtime.
@@ -205,8 +208,11 @@ async function questionWithAssumption(teamId: string, text: string, assumption: 
     .insert({ team_id: teamId, text, asked_by: asker!.user_id })
     .select("id")
     .single();
-  await admin.from("question_waiters").insert({ team_id: teamId, question_id: question!.id, user_id: asker!.user_id });
-  await admin.from("assumptions").insert({ team_id: teamId, question_id: question!.id, user_id: asker!.user_id, text: assumption });
+  // A wait belongs to a chat, so the asker needs a session first.
+  const sessionId = randomUUID();
+  assert.ifError((await admin.from("agent_sessions").insert({ id: sessionId, team_id: teamId, user_id: asker!.user_id })).error);
+  assert.ifError((await admin.from("question_waiters").insert({ team_id: teamId, question_id: question!.id, user_id: asker!.user_id, session_id: sessionId })).error);
+  assert.ifError((await admin.from("assumptions").insert({ team_id: teamId, question_id: question!.id, user_id: asker!.user_id, text: assumption })).error);
   return { questionId: question!.id as string, userId: asker!.user_id as string };
 }
 

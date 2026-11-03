@@ -337,6 +337,8 @@ test("confirming an assumption answers its question, and each agent sees what it
 
 test("changing a decision tells the whole team, and the new one takes over", async () => {
   const { teamId, leadAgent, bobAgent, carolAgent } = await newTeam();
+  // A chat only gets notices created after it started, and it starts on its first call.
+  await Promise.all([leadAgent, carolAgent].map((agent) => call(agent, "get_context")));
   const { question_id } = await call(bobAgent, "ask", { question: QUESTION, context: "Auth" });
   const { data: oldId } = await lead.supabase.rpc("answer_question", { target_question: question_id, answer: "37 minutes" });
   await call(bobAgent, "check_answers");
@@ -364,6 +366,7 @@ test("changing a decision tells the whole team, and the new one takes over", asy
 
 test("withdrawing a decision tells the whole team and reopens its question", async () => {
   const { leadAgent, bobAgent, carolAgent } = await newTeam();
+  await Promise.all([leadAgent, carolAgent].map((agent) => call(agent, "get_context")));
   const { question_id } = await call(bobAgent, "ask", { question: QUESTION, context: "Auth" });
   const { data: oldId } = await lead.supabase.rpc("answer_question", { target_question: question_id, answer: "37 minutes" });
   await call(bobAgent, "check_answers");

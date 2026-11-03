@@ -204,7 +204,7 @@ test("a held check_answers gives up when wait_seconds runs out", async () => {
   assert.ok(Date.now() - startedAt >= 4000);
 });
 
-test("an answer given while no session is running is shown to the next session", async () => {
+test("an answer given while no session is running goes to the next chat once it takes over", async () => {
   const { question_id } = await call(bobAgent, "ask", { question: "Late one?", context: "Test", confirmed_new: true });
   const { data: decision } = await admin
     .from("decisions")
@@ -213,12 +213,16 @@ test("an answer given while no session is running is shown to the next session",
     .single();
   await admin.from("questions").update({ status: "answered", decision_id: decision!.id }).eq("id", question_id);
 
+  // The wait belongs to the chat that asked, so the next chat is offered that chat instead.
   const nextSession = await connect(bob.credentials, teamId);
   const view = await call(nextSession, "get_context");
-  assert.deepEqual(
-    view.waiting_on.find((item: { question_id: string }) => item.question_id === question_id),
-    { question_id, question: "Late one?", answer_ready: true },
-  );
+  assert.ok(!view.waiting_on.some((item: { question_id: string }) => item.question_id === question_id));
+  const earlier = view.my_other_chats.find((chat: { waiting_on: string[] }) => chat.waiting_on.includes("Late one?"));
+  assert.ok(earlier, "the chat that asked is listed with its open wait");
+
+  // That chat is still running, so the person has to confirm it has stopped.
+  const resumed = await call(nextSession, "resume_session", { session_id: earlier.session_id, takeover: true });
+  assert.equal(resumed.resumed, true);
   assert.equal((await call(nextSession, "check_answers")).answers[0].answer, "Late answer");
 });
 
