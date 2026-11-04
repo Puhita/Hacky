@@ -4,6 +4,7 @@
   "description": "A shared brain for your team's AI coding agents.",
   "version": "0.0.1",
   "license": "MIT",
+  "icon": "media/icon.png",
   "private": true,
   "publisher": "hacky",
   "type": "module",
@@ -44,7 +45,7 @@
         {
           "id": "hacky",
           "title": "Hacky",
-          "icon": "media/icon.svg"
+          "icon": "media/activity-icon.svg"
         }
       ]
     },
