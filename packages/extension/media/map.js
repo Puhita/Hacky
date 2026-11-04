@@ -285,6 +285,28 @@
     return node;
   }
 
+  // The Hacky mascot, drawn inline because the panels may not load images.
+  function logo() {
+    const part = (tag, attrs) => svg(tag, attrs);
+    const root = svg("svg", { class: "logo", viewBox: "0 0 128 128", role: "img", "aria-label": "Hacky" });
+    for (const node of [
+        part("rect", { width: 128, height: 128, rx: 28, fill: "#16132B" }),
+        part("rect", { x: 15, y: 50, width: 6, height: 12, rx: 3, fill: "#4DE3F0" }),
+        part("rect", { x: 59, y: 50, width: 6, height: 12, rx: 3, fill: "#4DE3F0" }),
+        part("circle", { cx: 40, cy: 56, r: 22, fill: "#4DE3F0" }),
+        part("circle", { cx: 33, cy: 54, r: 3.5, fill: "#16132B" }),
+        part("circle", { cx: 47, cy: 54, r: 3.5, fill: "#16132B" }),
+        part("rect", { x: 67, y: 36, width: 42, height: 40, rx: 13, fill: "#FF8A6B" }),
+        part("rect", { x: 77, y: 52, width: 22, height: 8, rx: 4, fill: "#16132B" }),
+        part("path", { d: "M64 12 L67.5 20.5 L76 24 L67.5 27.5 L64 36 L60.5 27.5 L52 24 L60.5 20.5 Z", fill: "#FFFFFF" }),
+        part("rect", { x: 39, y: 66, width: 50, height: 46, rx: 15, fill: "#C8FF3D", stroke: "#16132B", "stroke-width": 4 }),
+        part("circle", { cx: 53, cy: 85, r: 4, fill: "#16132B" }),
+        part("circle", { cx: 75, cy: 85, r: 4, fill: "#16132B" }),
+        part("path", { d: "M58 96 Q64 101 70 96", fill: "none", stroke: "#16132B", "stroke-width": 2.8, "stroke-linecap": "round" }),
+      ]) root.appendChild(node);
+      return root;
+  }
+
   const title = el("h1", { text: "Hacky Map" });
   const zoomOut = el("button", { type: "button", class: "secondary", text: "−", "aria-label": "Zoom out", title: "Zoom out" });
   const zoomIn = el("button", { type: "button", class: "secondary", text: "+", "aria-label": "Zoom in", title: "Zoom in" });
@@ -294,7 +316,7 @@
     el("span", { class: "key assumption", text: "assumption" }),
     el("span", { class: "key agent", text: "agent to agent" }),
   ]);
-  const bar = el("header", {}, [title, legend, el("div", { class: "zoom" }, [zoomOut, zoomIn, fitButton])]);
+  const bar = el("header", {}, [logo(), title, legend, el("div", { class: "zoom" }, [zoomOut, zoomIn, fitButton])]);
 
   const sceneSvg = svg("svg", { class: "scene", role: "img", "aria-label": "Team map" });
   const edges = svg("g");

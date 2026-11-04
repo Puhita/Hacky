@@ -101,7 +101,7 @@ test("the Messages tab shows what needs the person first, and can show everythin
   assert.match(root.textContent, /What discount\?/);
   assert.ok(!root.textContent.includes("Which colour?"), "a team question for someone else is hidden under Needs me");
   assert.match(root.textContent, /Which fields\?/);
-  assert.ok(!root.textContent.includes("17% off"), "decisions are only under Everything");
+  assert.match(root.textContent, /17% off/, "decisions sit in the side rail");
 
   root.querySelector("#answer-q1").value = "17%";
   root.querySelector("#answer-q1").dispatchEvent(new window.Event("input"));
@@ -129,7 +129,7 @@ test("the Team tab shows people with their chats, and opens the map", () => {
   assert.match(root.textContent, /1 chat active/);
   assert.match(root.textContent, /Wiring the form/);
   assert.match(root.textContent, /Finished the API/);
-  click("Open animated map");
+  click("Open map");
   assert.deepEqual(sent[1], { type: "openMap" });
 });
 
@@ -166,4 +166,57 @@ test("a refresh waits while the person is typing, and half-typed text survives i
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.match(root.textContent, /3 agents waiting/);
   assert.equal(root.querySelector("#answer-q1").value, "half typed");
+});
+
+test("a decision can be changed or withdrawn from the Board", () => {
+  const { sent, send, root, click, window } = mount();
+  send(STATE);
+  click("Messages");
+  click("Change");
+  const area = root.querySelector("#decision-d1");
+  area.value = "20% off";
+  area.dispatchEvent(new window.Event("input"));
+  click("Replace");
+  assert.deepEqual(sent[1], { type: "changeDecision", decisionId: "d1", text: "20% off" });
+  click("Withdraw");
+  assert.deepEqual(sent[2], { type: "withdrawDecision", decisionId: "d1" });
+});
+
+test("an assumption is rejected with a reason from the Board", () => {
+  const { sent, send, root, click } = mount();
+  send(STATE);
+  click("Messages");
+  click("Reject…");
+  click("Reject and notify");
+  assert.equal(sent.length, 1, "a rejection needs a reason");
+  root.querySelector("#reason-a1").value = "It is 17%";
+  click("Reject and notify");
+  assert.deepEqual(sent[1], { type: "rejectAssumption", assumptionId: "a1", reason: "It is 17%" });
+});
+
+test("the Activity tab can be narrowed to one person", () => {
+  const { send, root, click } = mount();
+  send({
+    ...STATE,
+    feed: [
+      { id: "e1", summary: "Fixed average", files: [], created_at: "2026-11-02T10:00:00Z", author: "Bob" },
+      { id: "e2", summary: "Wrote the form", files: [], created_at: "2026-11-02T10:05:00Z", author: "Alice" },
+    ],
+  });
+  click("Activity");
+  assert.match(root.textContent, /Fixed average/);
+  assert.match(root.textContent, /Wrote the form/);
+  click("Bob");
+  assert.match(root.textContent, /Fixed average/);
+  assert.ok(!root.textContent.includes("Wrote the form"));
+  click("Everyone");
+  assert.match(root.textContent, /Wrote the form/);
+});
+
+test("the Team tab shows a map card with live numbers", () => {
+  const { send, root, click } = mount();
+  send(STATE);
+  click("Team");
+  assert.ok(root.querySelector(".hero svg.mini"));
+  assert.match(root.querySelector(".stats").textContent, /1working/);
 });

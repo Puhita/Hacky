@@ -4,20 +4,32 @@
 (function () {
   const vscode = acquireVsCodeApi();
   const root = document.getElementById("root");
+  root.classList.add("hk");
   let lastState = null;
   let pending = false;
 
+  // ---- Remembered choices ----
+
   const saved = vscode.getState() ?? {};
-  let tab = saved.tab ?? "tasks";
-  let messageFilter = saved.messageFilter ?? "mine";
+  const TAB_IDS = ["tasks", "messages", "team", "activity"];
+  let tab = TAB_IDS.includes(saved.tab) ? saved.tab : "tasks";
+  let messageFilter = saved.messageFilter === "all" ? "all" : "mine";
+  let activityFilter = typeof saved.activityFilter === "string" ? saved.activityFilter : "";
   const folds = { ...(saved.folds ?? {}) };
-  const drafts = new Map();
-  const persist = () => vscode.setState({ tab, messageFilter, folds });
+  const persist = () => vscode.setState({ tab, messageFilter, activityFilter, folds });
+
+  const drafts = new Map(); // half-typed text, by field id
+  const rejecting = new Set(); // assumption ids whose reject box is open
+  const changing = new Set(); // decision ids whose change box is open
+  const seen = new Set(); // ids already shown, so only new cards slide in
+  let firstRender = true;
+
+  // ---- Small helpers ----
 
   function el(tag, props = {}, children = []) {
     const node = document.createElement(tag);
     for (const [key, value] of Object.entries(props)) {
-      if (key === "onclick" || key === "onsubmit") node[key] = value;
+      if (key === "onclick" || key === "onsubmit" || key === "onkeydown") node[key] = value;
       else if (key === "text") node.textContent = value;
       else if (key === "class") node.className = value;
       else node.setAttribute(key, value);
@@ -26,17 +38,93 @@
     return node;
   }
 
-  const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
-
-  // ---- Small pieces ----
-
-  function button(text, onclick, className = "") {
-    return el("button", { type: "button", class: className, text, onclick });
+  const SVG_NS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs = {}, children = []) {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, value);
+    for (const child of children) node.appendChild(child);
+    return node;
   }
 
-  // A text box that survives re-renders, which happen whenever anything changes for the team.
-  function draftArea(id, label) {
-    const area = el("textarea", { "aria-label": label, placeholder: label, rows: "2", id });
+  const ICONS = {
+    board: ["M2 4.5A1.5 1.5 0 013.5 3h9A1.5 1.5 0 0114 4.5v7a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 11.5z", "M6 3v10M10 3v10"],
+    map: ["M5.2 4.8l5.6-.6M4.5 6.4l2.8 4.2M11.6 5.4L8.8 10.6", "M5.2 5a1.6 1.6 0 11-3.2 0 1.6 1.6 0 013.2 0zM14 4a1.6 1.6 0 11-3.2 0A1.6 1.6 0 0114 4zM9.6 12A1.6 1.6 0 116.4 12a1.6 1.6 0 013.2 0z"],
+    copy: ["M5.5 5.5h6a1.5 1.5 0 011.5 1.5v6a1.5 1.5 0 01-1.5 1.5h-6A1.5 1.5 0 014 13V7a1.5 1.5 0 011.5-1.5z", "M10.5 5.5V4A1.5 1.5 0 009 2.5H4A1.5 1.5 0 002.5 4v5A1.5 1.5 0 004 10.5h1.5"],
+    inbox: ["M2.5 9.5l1.7-5.3h7.6l1.7 5.3v3h-11z", "M2.5 9.5h3.2l.8 1.5h3l.8-1.5h3.2"],
+    team: ["M8.2 5.5a2.2 2.2 0 11-4.4 0 2.2 2.2 0 014.4 0z", "M2 13c.4-2.4 1.9-3.6 4-3.6s3.6 1.2 4 3.6", "M13.2 6a1.7 1.7 0 11-3.4 0 1.7 1.7 0 013.4 0z", "M11 9.6c1.9 0 2.8 1 3.2 2.9"],
+    activity: ["M1.5 8h3l2-4.5 3 9 2-4.5h3"],
+    chevron: ["M4 6l4 4 4-4"],
+    check: ["M3 8.5l3.2 3L13 4.5"],
+    close: ["M4 4l8 8M12 4l-8 8"],
+  };
+  function icon(name, className = "") {
+    const attrs = { viewBox: "0 0 16 16", "aria-hidden": "true" };
+    if (className) attrs.class = className;
+    return svgEl("svg", attrs, ICONS[name].map((d) => svgEl("path", { d })));
+  }
+
+  // The Hacky mascot, drawn inline because the panels may not load images.
+  function logo(className = "logo") {
+    const shape = (tag, attrs) => svgEl(tag, attrs);
+    return svgEl("svg", { class: className, viewBox: "0 0 128 128", role: "img", "aria-label": "Hacky" }, [
+      shape("rect", { width: "128", height: "128", rx: "28", fill: "#16132B" }),
+      shape("rect", { x: "15", y: "50", width: "6", height: "12", rx: "3", fill: "#4DE3F0" }),
+      shape("rect", { x: "59", y: "50", width: "6", height: "12", rx: "3", fill: "#4DE3F0" }),
+      shape("circle", { cx: "40", cy: "56", r: "22", fill: "#4DE3F0" }),
+      shape("circle", { cx: "33", cy: "54", r: "3.5", fill: "#16132B" }),
+      shape("circle", { cx: "47", cy: "54", r: "3.5", fill: "#16132B" }),
+      shape("rect", { x: "67", y: "36", width: "42", height: "40", rx: "13", fill: "#FF8A6B" }),
+      shape("rect", { x: "77", y: "52", width: "22", height: "8", rx: "4", fill: "#16132B" }),
+      shape("path", { d: "M64 12 L67.5 20.5 L76 24 L67.5 27.5 L64 36 L60.5 27.5 L52 24 L60.5 20.5 Z", fill: "#FFFFFF" }),
+      shape("rect", { x: "39", y: "66", width: "50", height: "46", rx: "15", fill: "#C8FF3D", stroke: "#16132B", "stroke-width": "4" }),
+      shape("circle", { cx: "53", cy: "85", r: "4", fill: "#16132B" }),
+      shape("circle", { cx: "75", cy: "85", r: "4", fill: "#16132B" }),
+      shape("path", { d: "M58 96 Q64 101 70 96", fill: "none", stroke: "#16132B", "stroke-width": "2.8", "stroke-linecap": "round" }),
+    ]);
+  }
+
+  const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+  const people = (count) => (count === 1 ? "1 person" : `${count} people`);
+
+  function age(iso) {
+    const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+    if (Number.isNaN(minutes)) return "";
+    if (minutes < 1) return "now";
+    if (minutes < 60) return `${minutes}m`;
+    if (minutes < 1440) return `${Math.round(minutes / 60)}h`;
+    return `${Math.round(minutes / 1440)}d`;
+  }
+
+  const initials = (name) =>
+    name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0].toUpperCase())
+      .join("") || "?";
+
+  // Status glyphs: colour and shape, drawn as SVG so they sit exactly in the middle. kinds: needs, wait, work, done, idle.
+  const glyph = (kind) => {
+    const part = (tag, attrs) => svgEl(tag, attrs);
+    const parts = {
+      needs: [part("circle", { class: "g-fill", cx: 8, cy: 8, r: 8 }), part("rect", { class: "g-cut", x: 7, y: 3.6, width: 2, height: 5.4, rx: 1 }), part("circle", { class: "g-cut", cx: 8, cy: 11.6, r: 1.15 })],
+      wait: [part("circle", { class: "g-ring", cx: 8, cy: 8, r: 7.2 }), part("rect", { class: "g-fill", x: 5.3, y: 5, width: 1.8, height: 6, rx: 0.9 }), part("rect", { class: "g-fill", x: 8.9, y: 5, width: 1.8, height: 6, rx: 0.9 })],
+      work: [part("circle", { class: "g-ring faint", cx: 8, cy: 8, r: 6.5 }), part("path", { class: "g-ring", d: "M8 1.5A6.5 6.5 0 0 1 14.5 8" })],
+      done: [part("circle", { class: "g-fill", cx: 8, cy: 8, r: 8 }), part("path", { class: "g-tick", d: "M4.8 8.3L7 10.5L11.3 5.8" })],
+      idle: [part("circle", { class: "g-ring", cx: 8, cy: 8, r: 7.2 }), part("path", { class: "g-dash", d: "M5 8H11" })],
+    };
+    return svgEl("svg", { class: `gl ${kind}`, viewBox: "0 0 16 16", "aria-hidden": "true" }, parts[kind] ?? parts.idle);
+  };
+  const hex = (kind, count, size = "sm") => el("span", { class: `hx ${kind} ${size}`.trim() }, [el("b", { text: String(count) })]);
+  const count = (n) => el("span", { class: "cnt", text: String(n) });
+  const avatar = (member, index, size = "") =>
+    el("span", { class: `av a${(index % 4) + 1} ${size}`.trim() }, [
+      document.createTextNode(initials(member.name)),
+      member.chats === undefined ? null : el("i", { class: `pd ${member.chats > 0 ? "live" : "idle"}` }),
+    ]);
+
+  function draftArea(id, label, placeholder = label) {
+    const area = el("textarea", { "aria-label": label, placeholder, rows: "2", id });
     area.value = drafts.get(id) ?? "";
     area.oninput = () => drafts.set(id, area.value);
     return area;
@@ -48,55 +136,98 @@
     vscode.postMessage(buildMessage(area.value));
   }
 
-  // A <details> whose open state is remembered. The summary is one truncated line while folded.
-  function fold(key, defaultOpen, headline, badge, bodyChildren) {
-    const node = el("details", { class: "fold" }, [
-      el("summary", {}, [badge, el("span", { class: "headline", text: headline })].filter(Boolean)),
-      el("div", { class: "fold-body" }, bodyChildren),
-    ]);
-    node.open = key in folds ? folds[key] : defaultOpen;
-    node.ontoggle = () => {
-      if (folds[key] === node.open) return;
-      folds[key] = node.open;
-      persist();
-    };
-    return node;
+  function isNew(id) {
+    const fresh = !firstRender && !seen.has(id);
+    seen.add(id);
+    return fresh;
   }
 
-  const card = (children) => el("article", { class: "card" }, children);
+  const isOpen = (key, dflt) => (key in folds ? folds[key] : dflt);
+
+  // A card that eases open. The choice is remembered per key.
+  function foldCard(key, defaultOpen, { kind, headline, meta, hot = false, fresh = false }, bodyChildren) {
+    const open = isOpen(key, defaultOpen);
+    const wrap = el("article", { class: `card${hot ? " hot" : ""}${fresh ? " fresh" : ""}${open ? " open" : ""}` });
+    const head = el("button", { type: "button", class: "card-h", "aria-expanded": String(open) }, [
+      glyph(kind),
+      el("span", { class: "ch" }, [el("span", { class: "hl cl2", text: headline }), meta ? el("span", { class: "meta" }, meta) : null]),
+      icon("chevron", "chev"),
+    ]);
+    const body = el("div", { class: `fold${open ? " open" : ""}` }, [el("div", { class: "fold-in" }, bodyChildren)]);
+    head.onclick = () => {
+      const next = !wrap.classList.contains("open");
+      folds[key] = next;
+      persist();
+      wrap.classList.toggle("open", next);
+      body.classList.toggle("open", next);
+      head.setAttribute("aria-expanded", String(next));
+    };
+    wrap.append(head, body);
+    return wrap;
+  }
+
+  const group = (title, total, children) =>
+    el("div", { class: "grp" }, [el("div", { class: "gh" }, [el("span", { text: title }), total === undefined ? null : count(total)]), ...children]);
   const empty = (text) => el("p", { class: "empty", text });
-  const badge = (text, kind = "") => el("span", { class: `badge ${kind}`.trim(), text });
+  const tag = (text) => el("span", { class: "tag", text });
+  const badge = () => el("span", { class: "badge" }, [el("i"), document.createTextNode("For you")]);
+
+  function button(label, className, onclick, iconName) {
+    return Object.assign(el("button", { type: "button", class: `btn ${className}` }, [iconName ? icon(iconName) : null, document.createTextNode(label)]), { onclick });
+  }
+
+  function openMap() {
+    vscode.postMessage({ type: "openMap" });
+  }
+
+  // ---- Derived numbers ----
+
+  const incomingOpen = (state) => state.agentChat.filter((thread) => thread.direction === "incoming" && thread.answer === null);
+  const needCount = (state) => state.inbox.filter((question) => question.routed_to_me).length + incomingOpen(state).length;
+  const liveChats = (state) => state.pulse.reduce((sum, member) => sum + member.chats, 0);
 
   // ---- Tasks ----
 
   const TASK_COLUMNS = [
-    ["todo", "To do"],
-    ["in_progress", "In progress"],
-    ["done", "Done"],
+    ["todo", "To do", "idle"],
+    ["in_progress", "In progress", "work"],
+    ["done", "Done", "done"],
   ];
 
-  function renderTask(task) {
-    const meta = [task.owner, (task.files ?? []).join(", ")].filter(Boolean).join(" · ");
-    return card([el("p", { class: "task-title", text: task.title }), meta ? el("p", { class: "muted", text: meta }) : null]);
+  function renderTask(task, kind, memberIndex) {
+    return el("article", { class: "tc" }, [
+      el("div", { class: "tc-top" }, [glyph(kind), el("span", { class: "hl cl2", text: task.title })]),
+      (task.files ?? []).length > 0 ? el("div", { class: "files" }, task.files.map((file) => el("span", { class: "file tr", text: file }))) : null,
+      el("div", { class: "tc-foot" }, [
+        task.owner
+          ? el("span", { class: "who" }, [el("span", { class: `av sm a${(memberIndex(task.owner) % 4) + 1}`, text: initials(task.owner) }), el("b", { text: task.owner })])
+          : el("span", { text: "Unclaimed" }),
+      ]),
+    ]);
   }
 
   function renderTasks(state) {
-    const title = el("input", { type: "text", name: "title", "aria-label": "New task", placeholder: "New task" });
+    const title = el("input", { type: "text", class: "in", id: "new-task", name: "title", "aria-label": "New task", placeholder: "What needs doing?" });
     const add = () => {
       if (title.value.trim() === "") return;
       vscode.postMessage({ type: "addTask", title: title.value });
     };
     title.onkeydown = (event) => event.key === "Enter" && add();
-    return el("div", {}, [
-      el("div", { class: "toolbar" }, [title, button("Add task", add)]),
+    const names = state.pulse.map((member) => member.name);
+    const memberIndex = (name) => Math.max(0, names.indexOf(name));
+    return el("div", { class: "bc-in" }, [
+      el("div", { class: "form" }, [
+        el("div", { class: "f1" }, [el("label", { for: "new-task", text: "New task" }), title]),
+        button("Add task", "pri", add),
+      ]),
       el(
         "div",
-        { class: "columns" },
-        TASK_COLUMNS.map(([status, name]) => {
+        { class: "kan" },
+        TASK_COLUMNS.map(([status, name, kind]) => {
           const tasks = state.tasks.filter((task) => task.status === status);
-          return el("section", { class: "column" }, [
-            el("h2", {}, [el("span", { text: name }), badge(String(tasks.length))]),
-            ...(tasks.length === 0 ? [empty("Nothing here.")] : tasks.map(renderTask)),
+          return el("section", { class: "col column" }, [
+            el("div", { class: "col-h" }, [glyph(kind), el("span", { text: name }), count(tasks.length)]),
+            ...(tasks.length === 0 ? [empty("Nothing here.")] : tasks.map((task) => renderTask(task, kind, memberIndex))),
           ]);
         }),
       ),
@@ -106,207 +237,393 @@
   // ---- Messages ----
 
   function renderQuestion(question) {
-    const answer = draftArea(`answer-${question.id}`, "Your answer");
-    const waiting = plural(question.waiting, "agent") + " waiting";
-    return card([
-      fold(`q-${question.id}`, true, question.text, question.routed_to_me ? badge("For you", "mine") : badge("Team"), [
-        question.context ? el("p", { class: "muted", text: question.context }) : null,
-        el("p", { class: "muted", text: `From ${question.asked_by_name}. ${waiting}.` }),
-        answer,
-        button("Send answer", () => sendDraft(answer, (text) => ({ type: "answer", questionId: question.id, text }))),
-      ]),
-    ]);
+    const key = `q-${question.id}`;
+    const answer = draftArea(`answer-${question.id}`, "Your answer", "Answer once. Every waiting agent gets it.");
+    return foldCard(
+      key,
+      true,
+      {
+        kind: "needs",
+        headline: question.text,
+        hot: question.routed_to_me,
+        fresh: isNew(key),
+        meta: [
+          question.routed_to_me ? badge() : null,
+          tag("Question"),
+          el("span", { text: question.asked_by_name }),
+          el("span", { text: `${plural(question.waiting, "agent")} waiting` }),
+          el("span", { text: age(question.created_at) }),
+        ],
+      },
+      [
+        el("div", { class: "fb" }, [
+          question.context ? el("p", { class: "ctx", text: question.context }) : null,
+          answer,
+          el("div", { class: "row" }, [
+            el("span", { class: "hint", text: `Reaches ${plural(question.waiting, "agent")}` }),
+            button("Send answer", "pri", () => sendDraft(answer, (text) => ({ type: "answer", questionId: question.id, text }))),
+          ]),
+        ]),
+      ],
+    );
   }
 
-  function renderThread(thread) {
-    const incoming = thread.direction === "incoming";
-    const open = thread.answer === null;
-    const who = incoming ? `${thread.other}'s agent asks` : `Your agent asked ${thread.other}`;
-    const answer = incoming && open ? draftArea(`peer-${thread.id}`, "Your answer") : null;
-    return card([
-      fold(`t-${thread.id}`, incoming && open, thread.question, badge(incoming ? "For you" : "Sent", incoming ? "mine" : ""), [
-        el("p", { class: "muted", text: who }),
-        thread.context ? el("p", { class: "muted", text: thread.context }) : null,
-        !open
-          ? el("p", { text: thread.answer })
-          : !incoming
-            ? el("p", { class: "muted", text: `Waiting for ${thread.other}.` })
-            : null,
-        !open ? el("p", { class: "muted", text: thread.answered_by_agent ? "Answered by their agent." : "Answered by a person." }) : null,
-        answer,
-        answer ? button("Send answer to agent", () => sendDraft(answer, (text) => ({ type: "answerTeammate", questionId: thread.id, text }))) : null,
-      ]),
-    ]);
+  // A question between agents that is waiting for this person.
+  function renderIncomingThread(thread) {
+    const key = `t-${thread.id}`;
+    const answer = draftArea(`peer-${thread.id}`, "Your answer", "Reply to the agent");
+    return foldCard(
+      key,
+      true,
+      {
+        kind: "needs",
+        headline: thread.question,
+        hot: true,
+        fresh: isNew(key),
+        meta: [badge(), tag("Agent"), el("span", { text: `${thread.other}'s agent asks` }), el("span", { text: age(thread.created_at) })],
+      },
+      [
+        el("div", { class: "fb" }, [
+          thread.context ? el("p", { class: "ctx", text: thread.context }) : null,
+          answer,
+          el("div", { class: "row" }, [
+            el("span", { class: "hint", text: `Reaches ${thread.other}'s agent` }),
+            button("Send answer to agent", "pri", () => sendDraft(answer, (text) => ({ type: "answerTeammate", questionId: thread.id, text }))),
+          ]),
+        ]),
+      ],
+    );
   }
 
   function renderAssumption(assumption) {
-    const reason = draftArea(`reason-${assumption.id}`, "Why it's wrong, or what to do instead");
-    return card([
-      fold(`a-${assumption.id}`, true, assumption.text, badge("Assumption", "warn"), [
-        el("p", { class: "muted", text: `Assumed by ${assumption.author}, for: ${assumption.question}` }),
-        el("div", { class: "actions" }, [
-          button("Confirm", () => vscode.postMessage({ type: "confirmAssumption", assumptionId: assumption.id })),
+    const key = `a-${assumption.id}`;
+    const reason = draftArea(`reason-${assumption.id}`, "Why it's wrong, or what to do instead", "Why? The agent will read this.");
+    const rejectOpen = rejecting.has(assumption.id);
+    return el("article", { class: `card${isNew(key) ? " fresh" : ""}` }, [
+      el("div", { class: "as-h" }, [
+        glyph("wait"),
+        el("span", { class: "ch" }, [
+          el("span", { class: "hl cl2", text: assumption.text }),
+          el("span", { class: "meta" }, [el("span", { text: `Assumed by ${assumption.author}, for: ${assumption.question}` })]),
         ]),
-        reason,
-        button("Reject", () => sendDraft(reason, (text) => ({ type: "rejectAssumption", assumptionId: assumption.id, reason: text })), "secondary"),
       ]),
+      el("div", { class: "as-a" }, [
+        button("Confirm", "sec", () => vscode.postMessage({ type: "confirmAssumption", assumptionId: assumption.id }), "check"),
+        Object.assign(button("Reject…", "ghost", () => {
+          if (rejecting.has(assumption.id)) rejecting.delete(assumption.id);
+          else rejecting.add(assumption.id);
+          render(lastState);
+        }, "close"), {}),
+      ]),
+      rejectOpen
+        ? el("div", { class: "fb2" }, [
+            reason,
+            el("div", { class: "row" }, [
+              el("button", {
+                type: "button",
+                class: "lnk",
+                text: "Cancel",
+                onclick: () => {
+                  rejecting.delete(assumption.id);
+                  render(lastState);
+                },
+              }),
+              button("Reject and notify", "pri", () => sendDraft(reason, (text) => ({ type: "rejectAssumption", assumptionId: assumption.id, reason: text }))),
+            ]),
+          ])
+        : null,
+    ]);
+  }
+
+  // Read-only: answered threads, and ones this person's agent is waiting on.
+  function renderThreadCard(thread) {
+    const open = thread.answer === null;
+    const incoming = thread.direction === "incoming";
+    const who = incoming ? `${thread.other}'s agent asks` : `Your agent asked ${thread.other}`;
+    return el("div", { class: "thr" }, [
+      el("div", { class: "thr-h" }, [glyph(open ? "wait" : "done"), el("b", { text: who }), el("span", { class: "sp" }), open ? null : tag("Read-only"), el("span", { text: age(thread.created_at) })]),
+      el("div", { class: "hl plain", text: thread.question }),
+      thread.context ? el("div", { class: "thr-a", text: thread.context }) : null,
+      open
+        ? el("div", { class: "thr-a", text: `Waiting for ${thread.other}.` })
+        : el("div", { class: "thr-a" }, [el("span", { text: thread.answer }), el("span", { class: "muted", text: thread.answered_by_agent ? "Answered by their agent." : "Answered by a person." })]),
     ]);
   }
 
   function renderDecision(decision) {
-    return card([
-      fold(`d-${decision.id}`, false, decision.text, badge("Decision", "done"), [
-        decision.question ? el("p", { class: "muted", text: decision.question }) : null,
-        el("p", { class: "muted", text: `Decided by ${decision.author}. Change or withdraw it in the sidebar.` }),
+    const open = changing.has(decision.id);
+    const replacement = open ? draftArea(`decision-${decision.id}`, "The new decision") : null;
+    return el("div", { class: "dec" }, [
+      el("div", { class: "dec-t", text: decision.text }),
+      decision.question ? el("div", { class: "dec-m", text: decision.question }) : null,
+      el("div", { class: "dec-m", text: `Decided by ${decision.author} · ${age(decision.created_at)}` }),
+      el("div", { class: "dec-a" }, [
+        el("button", {
+          type: "button",
+          class: "lnk",
+          text: open ? "Cancel" : "Change",
+          onclick: () => {
+            if (changing.has(decision.id)) changing.delete(decision.id);
+            else changing.add(decision.id);
+            render(lastState);
+          },
+        }),
+        el("button", { type: "button", class: "lnk", text: "Withdraw", onclick: () => vscode.postMessage({ type: "withdrawDecision", decisionId: decision.id }) }),
       ]),
-    ]);
-  }
-
-  function group(title, items, render, emptyText) {
-    return el("section", { class: "group" }, [
-      el("h2", {}, [el("span", { text: title }), badge(String(items.length), items.length > 0 ? "mine" : "")]),
-      ...(items.length === 0 ? [empty(emptyText)] : items.map(render)),
+      replacement,
+      open ? button("Replace", "pri sm", () => sendDraft(replacement, (text) => ({ type: "changeDecision", decisionId: decision.id, text }))) : null,
     ]);
   }
 
   function renderMessages(state) {
     const mine = messageFilter === "mine";
     const questions = mine ? state.inbox.filter((question) => question.routed_to_me) : state.inbox;
-    const threads = mine ? state.agentChat.filter((thread) => thread.direction === "incoming" && thread.answer === null) : state.agentChat;
-    const assumptions = state.assumptions;
-    const decisions = mine ? [] : state.decisions;
-    const filter = (value, label) =>
-      el("button", {
-        type: "button",
-        class: `chip${messageFilter === value ? " selected" : ""}`,
-        "aria-pressed": String(messageFilter === value),
-        text: label,
-        onclick: () => {
-          messageFilter = value;
-          persist();
-          render(lastState);
-        },
-      });
-    return el("div", {}, [
-      el("div", { class: "toolbar" }, [filter("mine", "Needs me"), filter("all", "Everything")]),
-      group("Questions", questions, renderQuestion, mine ? "No question is waiting for you." : "No open questions."),
-      group("Agent questions", threads, renderThread, mine ? "No agent is waiting for you." : "No agent has asked another agent anything yet."),
-      group("Assumptions", assumptions, renderAssumption, "No agent is working on an assumption."),
-      mine ? null : group("Decisions", decisions, renderDecision, "No decisions yet."),
+    const incoming = incomingOpen(state);
+    const waiting = mine ? [...questions.map(renderQuestion), ...incoming.map(renderIncomingThread)] : [...questions.map(renderQuestion), ...incoming.map(renderIncomingThread)];
+    const waitingCount = questions.length + incoming.length;
+    const rest = state.agentChat.filter((thread) => !incoming.includes(thread));
+    const need = needCount(state);
+    const segment = (value, label, badgeNode) =>
+      el("button", { type: "button", class: messageFilter === value ? "on" : "", "aria-pressed": String(messageFilter === value), onclick: () => {
+        messageFilter = value;
+        persist();
+        render(lastState);
+      } }, [document.createTextNode(label), badgeNode]);
+
+    const main = [
+      group(mine ? "Waiting for you" : "Questions", waitingCount, waiting.length > 0 ? waiting : [empty(mine ? "Nothing is waiting for you." : "No open questions.")]),
+      group("Agents are proceeding on", state.assumptions.length, state.assumptions.length > 0 ? [el("div", { class: "two" }, state.assumptions.map(renderAssumption))] : [empty("No agent is working on an assumption.")]),
+      mine ? null : group("Agent chats", rest.length, rest.length > 0 ? rest.map(renderThreadCard) : [empty("No agent has asked another agent anything yet.")]),
+    ];
+
+    return el("div", { class: "bc-in" }, [
+      el("div", { class: "bar" }, [
+        el("div", {}, [el("h2", { text: "Messages" }), el("div", { class: "sub", text: `${plural(need, "question")} wait on you · ${plural(state.assumptions.length, "assumption")} to review` })]),
+        el("span", { class: "sp" }),
+        el("div", { class: "seg", role: "group", "aria-label": "Filter messages" }, [
+          segment("mine", "Mine", need > 0 ? hex("needs", need) : null),
+          segment("all", "Everything", null),
+        ]),
+      ]),
+      el("div", { class: "cols" }, [
+        el("div", { class: "main" }, main.filter(Boolean)),
+        el("aside", { class: "rail", "aria-label": "Decisions" }, [
+          el("h3", {}, [el("span", { text: "Decisions" }), count(state.decisions.length)]),
+          ...(state.decisions.length === 0 ? [empty("No decisions yet.")] : state.decisions.map(renderDecision)),
+          el("p", { class: "hint rail-note", text: "Changing or withdrawing a decision notifies every agent." }),
+        ]),
+      ]),
     ]);
   }
 
   // ---- Team ----
 
-  const CHAT_STATE = { active: "Active", idle: "Idle", ended: "Ended" };
-
-  function renderChat(chat) {
-    return el("li", { class: `chat ${chat.state}` }, [
-      el("span", { class: "dot", "aria-hidden": "true" }),
-      el("span", { class: "chat-state", text: CHAT_STATE[chat.state] }),
-      el("span", { class: "chat-focus", text: chat.focus ?? chat.task ?? "No focus yet" }),
-    ]);
+  // A picture of the team: people as hexes, their live chats around them, open questions in orange.
+  function miniMap(state) {
+    const members = state.pulse.slice(0, 5);
+    const links = [];
+    const nodes = [];
+    const labels = [];
+    const step = members.length > 1 ? 220 / (members.length - 1) : 0;
+    const centre = members.length > 1 ? 40 : 150;
+    const yAt = (index) => [54, 40, 66][index % 3];
+    members.forEach((member, index) => {
+      const x = centre + index * step;
+      const y = yAt(index);
+      const points = [[0, -21], [18.2, -10.5], [18.2, 10.5], [0, 21], [-18.2, 10.5], [-18.2, -10.5]].map(([dx, dy]) => `${x + dx},${y + dy}`).join(" ");
+      nodes.push(svgEl("polygon", { class: "p", points }));
+      labels.push(svgEl("text", { x: String(x), y: String(y + 5) }, [document.createTextNode(initials(member.name))]));
+      for (let dot = 0; dot < Math.min(member.chats, 2); dot += 1) {
+        const dx = x + (dot === 0 ? -34 : 34);
+        const dy = y + (index % 2 === 0 ? -34 : 34);
+        links.push(svgEl("path", { d: `M${x} ${y}L${dx} ${dy}` }));
+        nodes.push(svgEl("circle", { class: "n-work", cx: String(dx), cy: String(dy), r: "6" }));
+      }
+      if (index > 0) links.push(svgEl("path", { d: `M${centre + (index - 1) * step} ${yAt(index - 1)}L${x} ${y}` }));
+    });
+    if (needCount(state) > 0 && members.length > 0) {
+      links.push(svgEl("path", { class: "q", d: `M150 90L${centre} 56` }));
+      nodes.push(svgEl("circle", { class: "n-q", cx: "150", cy: "88", r: "11" }));
+      labels.push(svgEl("text", { class: "n-q-t", x: "150", y: "92" }, [document.createTextNode("?")]));
+    }
+    return svgEl(
+      "svg",
+      { class: "mini", viewBox: "0 0 300 104", preserveAspectRatio: "xMidYMid meet", role: "img", "aria-label": `Map preview: ${people(state.pulse.length)}, ${plural(liveChats(state), "chat")}, ${plural(needCount(state), "open question")}` },
+      [svgEl("g", { class: "lk" }, links), ...nodes, ...labels],
+    );
   }
 
-  function renderPerson(member, owner, chats) {
-    const shown = chats.filter((chat) => chat.state !== "ended").slice(0, 5);
-    return card([
-      el("h3", { text: member.me ? `${member.name} (you)` : member.name }),
-      el("p", { class: "muted", text: member.chats > 0 ? plural(member.chats, "chat") + " active" : "No chat active" }),
-      shown.length > 0 ? el("ul", { class: "chats" }, shown.map(renderChat)) : null,
-      member.updates > 0 ? el("p", { class: "muted", text: `${plural(member.updates, "update")} in the last hour:` }) : null,
-      ...member.latest.map((summary) => el("p", { text: summary })),
+  const CHAT_GLYPH = { active: "work", idle: "idle", ended: "done" };
+
+  function renderPerson(member, index, chatsOf) {
+    const mapChats = chatsOf(member.name).filter((chat) => chat.state !== "ended").slice(0, 5);
+    const rows =
+      mapChats.length > 0
+        ? mapChats.map((chat) => ({ kind: CHAT_GLYPH[chat.state] ?? "idle", name: chat.state === "active" ? "Active" : "Idle", text: chat.focus ?? chat.task ?? "No focus yet", when: chat.lastSeenAt ? age(chat.lastSeenAt) : "" }))
+        : member.focus.map((focus) => ({ kind: "work", name: "Now", text: focus, when: "" }));
+    const live = member.chats > 0;
+    return el("article", { class: "pc" }, [
+      el("div", { class: "pc-h" }, [
+        avatar(member, index),
+        el("div", { class: "grow" }, [
+          el("div", { class: "pc-n tr", text: member.me ? `${member.name} (you)` : member.name }),
+          el("div", { class: "hint", text: live ? `${plural(member.chats, "chat")} active` : "No chat active" }),
+        ]),
+        button("Show on Map", "ghost sm", openMap),
+      ]),
+      rows.length > 0
+        ? el("ul", {}, rows.map((row) =>
+            el("li", { class: "chat" }, [glyph(row.kind), el("div", { class: "ch" }, [
+              el("div", { class: "cn" }, [el("span", { class: "tr", text: row.name }), el("span", { class: "age", text: row.when })]),
+              el("div", { class: "now cl2", text: row.text }),
+            ])]),
+          ))
+        : null,
+      member.updates > 0 || member.latest.length > 0
+        ? el("div", {}, [
+            el("div", { class: "gh gh-tight" }, [el("span", { text: "Recent progress" })]),
+            member.updates > 0 ? el("p", { class: "hint", text: `${plural(member.updates, "update")} in the last hour:` }) : null,
+            el("ul", { class: "pg" }, member.latest.map((summary) => el("li", {}, [el("span", { class: "grow", text: summary })]))),
+          ])
+        : null,
     ]);
   }
 
   function renderTeam(state) {
     const owners = new Map(((state.map && state.map.owners) || []).map((owner) => [owner.name, owner]));
-    return el("div", {}, [
-      el("div", { class: "toolbar" }, [
-        el("p", { class: "muted grow", text: "Who is on the team and what their agents are doing." }),
-        button("Open animated map", () => vscode.postMessage({ type: "openMap" }), "secondary"),
+    const chatsOf = (name) => {
+      const owner = owners.get(name);
+      return owner ? ((state.map && state.map.chats) || []).filter((chat) => chat.ownerId === owner.id) : [];
+    };
+    const waiting = state.inbox.reduce((sum, question) => sum + question.waiting, 0);
+    return el("div", { class: "bc-in" }, [
+      el("div", { class: "hero" }, [
+        el("div", { class: "hero-l" }, [
+          el("h2", { text: "Hacky Map" }),
+          el("p", { text: "See every person, chat and open question as a live graph. Zoom in, follow the flowing links, and scrub the work timeline." }),
+          el("div", { class: "stats" }, [
+            el("span", { class: "st" }, [hex("work", liveChats(state)), document.createTextNode("working")]),
+            el("span", { class: "st" }, [hex(waiting > 0 ? "wait" : "", waiting), document.createTextNode("waiting")]),
+            el("span", { class: "st" }, [hex(needCount(state) > 0 ? "needs" : "", needCount(state)), document.createTextNode("open questions")]),
+          ]),
+          el("div", { class: "hero-a" }, [button("Open map", "pri lg", openMap), el("span", { class: "hint", text: "Opens in its own editor tab" })]),
+        ]),
+        miniMap(state),
       ]),
-      state.pulse.length === 0
-        ? empty("Nobody is on the team yet.")
-        : el(
-            "div",
-            { class: "people" },
-            state.pulse.map((member) => {
-              const owner = owners.get(member.name);
-              const chats = owner ? ((state.map && state.map.chats) || []).filter((chat) => chat.ownerId === owner.id) : [];
-              return renderPerson(member, owner, chats);
-            }),
-          ),
+      state.pulse.length === 0 ? empty("Nobody is on the team yet.") : el("div", { class: "people" }, state.pulse.map((member, index) => renderPerson(member, index, chatsOf))),
     ]);
   }
 
   // ---- Activity ----
 
+  const HOUR = 3_600_000;
+
   function renderActivity(state) {
-    if (state.feed.length === 0) return empty("No activity yet.");
-    return el(
-      "div",
-      { class: "feed" },
-      state.feed.map((item) =>
-        card([
-          el("p", { text: item.summary }),
-          el("p", {
-            class: "muted",
-            text: [item.author, new Date(item.created_at).toLocaleString(), (item.files ?? []).join(", ")].filter(Boolean).join(" · "),
-          }),
+    const authors = [...new Set(state.feed.map((item) => item.author))];
+    if (activityFilter && !authors.includes(activityFilter)) activityFilter = "";
+    const chip = (value, label) =>
+      el("button", { type: "button", class: `chip${activityFilter === value ? " on" : ""}`, "aria-pressed": String(activityFilter === value), text: label, onclick: () => {
+        activityFilter = value;
+        persist();
+        render(lastState);
+      } });
+    const items = state.feed.filter((item) => !activityFilter || item.author === activityFilter);
+    const rows = [];
+    let divided = false;
+    items.forEach((item, index) => {
+      const recent = Date.now() - new Date(item.created_at).getTime() < HOUR;
+      if (!recent && !divided && index > 0) {
+        rows.push(el("div", { class: "div", text: "Earlier" }));
+        divided = true;
+      }
+      rows.push(
+        el("div", { class: `ev${recent ? " new" : ""}` }, [
+          el("span", { class: "tm", text: new Date(item.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) }),
+          glyph(recent ? "work" : "done"),
+          el("span", { class: "grow" }, [
+            el("b", { text: item.author }),
+            document.createTextNode(` ${item.summary}`),
+            (item.files ?? []).length > 0 ? el("span", { class: "files-line tr", text: item.files.join(", ") }) : null,
+          ]),
+          el("span", { class: "age", text: age(item.created_at) }),
         ]),
-      ),
-    );
+      );
+    });
+    return el("div", { class: "bc-in" }, [
+      el("div", { class: "bar" }, [
+        el("div", {}, [el("h2", { text: "Activity" }), el("div", { class: "sub", text: "What everyone's agents did" })]),
+        el("span", { class: "sp" }),
+        authors.length > 1 ? el("div", { class: "chips", role: "group", "aria-label": "Filter activity" }, [chip("", "Everyone"), ...authors.map((author) => chip(author, author))]) : null,
+      ]),
+      rows.length === 0 ? empty("No activity yet.") : el("div", { class: "tl" }, rows),
+    ]);
   }
 
   // ---- Page ----
 
-  function counts(state) {
-    return {
-      tasks: state.tasks.filter((task) => task.status !== "done").length,
-      messages:
-        state.inbox.filter((question) => question.routed_to_me).length +
-        state.agentChat.filter((thread) => thread.direction === "incoming" && thread.answer === null).length +
-        state.assumptions.length,
-    };
-  }
-
   const TABS = [
-    ["tasks", "Tasks", renderTasks],
-    ["messages", "Messages", renderMessages],
-    ["team", "Team", renderTeam],
-    ["activity", "Activity", renderActivity],
+    ["tasks", "Tasks", "board", renderTasks],
+    ["messages", "Messages", "inbox", renderMessages],
+    ["team", "Team", "team", renderTeam],
+    ["activity", "Activity", "activity", renderActivity],
   ];
 
-  function renderBoard(state) {
-    const number = counts(state);
-    const body = TABS.find(([id]) => id === tab) ?? TABS[0];
-    return el("div", { class: "board" }, [
-      el("header", {}, [
-        el("h1", { text: `${state.team.name} board` }),
-        el(
-          "nav",
-          { role: "tablist" },
-          TABS.map(([id, label]) =>
-            el(
-              "button",
-              {
-                type: "button",
-                role: "tab",
-                class: `tab${tab === id ? " selected" : ""}`,
-                "aria-selected": String(tab === id),
-                onclick: () => {
-                  tab = id;
-                  persist();
-                  render(lastState);
-                },
-              },
-              [el("span", { text: label }), number[id] ? badge(String(number[id]), "mine") : null],
-            ),
-          ),
-        ),
+  function tabBadge(id, state) {
+    if (id === "tasks") {
+      const open = state.tasks.filter((task) => task.status !== "done").length;
+      return open > 0 ? hex("", open) : null;
+    }
+    if (id === "messages") {
+      const need = needCount(state) + state.assumptions.length;
+      return need > 0 ? hex("needs", need) : null;
+    }
+    if (id === "team") return liveChats(state) > 0 ? el("i", { class: "pd live" }) : null;
+    return null;
+  }
+
+  function renderTop(state) {
+    return el("header", { class: "top" }, [
+      logo(),
+      el("span", { class: "wm", text: "Hacky" }),
+      el("span", { class: "sl", text: "/" }),
+      el("span", { class: "tn", text: state.team.name }),
+      el("div", { class: "inv" }, [
+        document.createTextNode("Invite"),
+        el("code", { text: state.team.invite_code }),
+        el("button", {
+          type: "button",
+          class: "ib",
+          "aria-label": "Copy invite code",
+          title: "Copy invite code",
+          onclick: () => navigator.clipboard.writeText(state.team.invite_code),
+        }, [icon("copy")]),
       ]),
-      el("main", { role: "tabpanel" }, [body[2](state)]),
+      el("span", { class: "sp" }),
+      state.pulse.length > 0
+        ? el("div", { class: "stack", role: "img", "aria-label": `Team presence: ${state.pulse.map((member) => `${member.name} ${member.chats > 0 ? "online" : "offline"}`).join(", ")}` }, state.pulse.slice(0, 6).map((member, index) => avatar(member, index)))
+        : null,
+      button("Open map", "sec", openMap, "map"),
+    ]);
+  }
+
+  function renderBoard(state) {
+    const current = TABS.find(([id]) => id === tab) ?? TABS[0];
+    return el("div", { class: "board" }, [
+      renderTop(state),
+      el("nav", { class: "btabs", role: "tablist", "aria-label": "Board sections" }, TABS.map(([id, label, iconName]) =>
+        el("button", {
+          type: "button",
+          role: "tab",
+          class: `btab${tab === id ? " on selected" : ""}`,
+          "aria-selected": String(tab === id),
+          onclick: () => {
+            tab = id;
+            persist();
+            render(lastState);
+          },
+        }, [icon(iconName), el("span", { class: "lbl", text: label }), tabBadge(id, state)]),
+      )),
+      el("main", { class: "bc", role: "tabpanel" }, [current[3](state)]),
     ]);
   }
 
@@ -317,6 +634,7 @@
   function render(state) {
     const focusedDraft = document.activeElement?.tagName === "TEXTAREA" ? document.activeElement.id : null;
     const caret = focusedDraft ? document.activeElement.selectionStart : 0;
+    const scrolled = window.scrollY;
     root.replaceChildren(
       ...[
         state.error ? renderMessage(state.error, "error") : null,
@@ -327,6 +645,7 @@
       ].filter(Boolean),
     );
     pending = false;
+    if (scrolled > 0) window.scrollTo(0, scrolled);
     if (focusedDraft) {
       const restored = document.getElementById(focusedDraft);
       if (restored) {
@@ -334,12 +653,13 @@
         restored.setSelectionRange(caret, caret);
       }
     }
+    firstRender = false;
   }
 
   // A background refresh must not wipe out what the person is typing, so it waits until they leave the field.
   function isTyping() {
-    const tag = document.activeElement?.tagName;
-    return tag === "INPUT" || tag === "TEXTAREA";
+    const tagName = document.activeElement?.tagName;
+    return tagName === "INPUT" || tagName === "TEXTAREA";
   }
 
   window.addEventListener("message", (event) => {
