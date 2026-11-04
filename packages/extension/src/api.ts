@@ -13,6 +13,13 @@ const ACTIVE_WINDOW_MS = 10 * 60_000;
 const PULSE_LATEST = 3;
 // The map shows chats seen, and questions asked, within this long, plus anything still open.
 const MAP_WINDOW_MS = 60 * 60_000;
+const MAP_OWNER_TASKS = 8;
+const MAP_UNASSIGNED_TASKS = 8;
+const MAP_DECISIONS = 5;
+const MAP_TIMELINE_ITEMS = 60;
+const MAP_LABEL_LENGTH = 120;
+// Enough history to show a whole hackathon.
+const MAP_HISTORY_LIMIT = 200;
 
 // Where the confirmation email's link lands. It opens the user's editor, so nothing has to be
 // hosted. Each URL must be in the project's allowed redirects, see supabase/config.toml.
@@ -54,7 +61,18 @@ export type PulseMember = {
 };
 
 // What the Hacky Map draws: the people on a team, their agent chats, and the questions open between them.
-export type MapOwner = { id: string; name: string; me: boolean };
+export type MapTask = { id: string; title: string; status: "todo" | "in_progress" | "done"; files: string[] };
+export type MapOwner = {
+  id: string;
+  name: string;
+  me: boolean;
+  // Their tasks that aren't done, newest first.
+  tasks: MapTask[];
+  // How many tasks they have finished.
+  doneTasks: number;
+};
+export type MapDecision = { id: string; text: string; createdAt: string; question: string | null };
+export type MapTimelineItem = { id: string; at: string; kind: "task_done" | "decision" | "question"; label: string };
 export type MapChat = {
   id: string;
   ownerId: string;
@@ -87,7 +105,24 @@ export type MapThread = {
   // The signed-in person can answer it here. Assumptions are confirmed or rejected in the sidebar, so never.
   mine: boolean;
 };
-export type MapState = { project: string; owners: MapOwner[]; chats: MapChat[]; threads: MapThread[] };
+export type MapState = {
+  project: string;
+  owners: MapOwner[];
+  chats: MapChat[];
+  threads: MapThread[];
+  // Todo tasks nobody has taken yet.
+  unassigned: MapTask[];
+  // The latest active decisions.
+  decisions: MapDecision[];
+  stats: {
+    tasks: { todo: number; in_progress: number; done: number };
+    openQuestions: number;
+    decisions: number;
+    activeChats: number;
+  };
+  // What got done and decided since the team started, oldest first.
+  timeline: { from: string; items: MapTimelineItem[] };
+};
 
 function unwrap<T>({ data, error }: { data: T; error: { message: string } | null }): NonNullable<T> {
   if (error) throw new Error(error.message);
@@ -395,7 +430,7 @@ export class HackyApi {
     const user = await this.currentUser();
     const meId = user?.id;
     const windowStart = new Date(Date.now() - MAP_WINDOW_MS).toISOString();
-    const [team, names, sessions, tasks, questions, assumptions, peers] = await Promise.all([
+    const [team, names, sessions, tasks, questions, assumptions, peers, decisionRows, questionHistory, firstSession] = await Promise.all([
       this.supabase.from("teams").select("name").eq("id", teamId).single().then(unwrap),
       this.memberNames(teamId),
       this.supabase
@@ -405,7 +440,12 @@ export class HackyApi {
         .gte("last_seen_at", windowStart)
         .order("started_at", { ascending: true })
         .then(unwrap),
-      this.supabase.from("tasks").select("id, title").eq("team_id", teamId).limit(TASK_LIMIT).then(unwrap),
+      this.supabase
+        .from("tasks")
+        .select("id, title, status, owner_id, files, created_at, updated_at")
+        .eq("team_id", teamId)
+        .limit(TASK_LIMIT)
+        .then(unwrap),
       this.supabase
         .from("questions")
         .select("id, text, context, asked_by, routed_to, status, created_at, decisions(text), question_waiters(user_id, session_id)")
@@ -428,9 +468,33 @@ export class HackyApi {
         .or(`status.eq.open,created_at.gte.${windowStart}`)
         .order("created_at", { ascending: true })
         .then(unwrap),
+      // Everything decided so far, for the latest decisions, the count and the timeline.
+      this.supabase
+        .from("decisions")
+        .select("id, text, status, created_at, questions(text)")
+        .eq("team_id", teamId)
+        .order("created_at", { ascending: false })
+        .limit(MAP_HISTORY_LIMIT)
+        .then(unwrap),
+      this.supabase
+        .from("questions")
+        .select("id, text, created_at")
+        .eq("team_id", teamId)
+        .order("created_at", { ascending: false })
+        .limit(MAP_HISTORY_LIMIT)
+        .then(unwrap),
+      this.supabase
+        .from("agent_sessions")
+        .select("started_at")
+        .eq("team_id", teamId)
+        .order("started_at", { ascending: true })
+        .limit(1)
+        .then(unwrap),
     ]);
 
-    const taskTitles = new Map(tasks.map((task) => [task.id, task.title as string]));
+    // Board titles can be paragraphs. The map shows a short form so a chat or task node stays readable.
+    const label = (text: string) => (text.length > MAP_LABEL_LENGTH ? `${text.slice(0, MAP_LABEL_LENGTH - 1)}…` : text);
+    const taskTitles = new Map(tasks.map((task) => [task.id, label(task.title as string)]));
     const known = new Set(sessions.map((session) => session.id));
     // Sessions are oldest first, so when a chat took over several, the latest one wins.
     const tookOver = new Map<string, string>();
@@ -511,11 +575,69 @@ export class HackyApi {
     }
     threads.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
+    const mapTask = (task: { id: string; title: string; status: MapTask["status"]; files: string[] | null }): MapTask => ({
+      id: task.id,
+      title: label(task.title),
+      status: task.status,
+      files: task.files ?? [],
+    });
+    const newestFirst = (a: { created_at: string }, b: { created_at: string }) => b.created_at.localeCompare(a.created_at);
+    const owners: MapOwner[] = [...names].map(([id, name]) => {
+      const mine = tasks.filter((task) => task.owner_id === id);
+      return {
+        id,
+        name,
+        me: id === meId,
+        tasks: mine
+          .filter((task) => task.status !== "done")
+          .sort(newestFirst)
+          .slice(0, MAP_OWNER_TASKS)
+          .map(mapTask),
+        doneTasks: mine.filter((task) => task.status === "done").length,
+      };
+    });
+    const unassigned = tasks
+      .filter((task) => task.owner_id === null && task.status === "todo")
+      .sort(newestFirst)
+      .slice(0, MAP_UNASSIGNED_TASKS)
+      .map(mapTask);
+
+    const activeDecisions = decisionRows.filter((decision) => decision.status === "active");
+    const items: MapTimelineItem[] = [
+      ...tasks.filter((task) => task.status === "done").map((task) => ({ id: task.id, at: task.updated_at, kind: "task_done" as const, label: label(task.title) })),
+      ...decisionRows.map((decision) => ({ id: decision.id, at: decision.created_at, kind: "decision" as const, label: label(decision.text) })),
+      ...questionHistory.map((question) => ({ id: question.id, at: question.created_at, kind: "question" as const, label: label(question.text) })),
+    ];
+    items.sort((a, b) => a.at.localeCompare(b.at));
+    const starts = [
+      ...tasks.map((task) => task.created_at),
+      ...decisionRows.map((decision) => decision.created_at),
+      ...questionHistory.map((question) => question.created_at),
+      ...firstSession.map((session) => session.started_at),
+    ].sort();
+
     return {
       project: team.name,
-      owners: [...names].map(([id, name]) => ({ id, name, me: id === meId })),
+      owners,
       chats,
       threads,
+      unassigned,
+      decisions: activeDecisions.slice(0, MAP_DECISIONS).map((decision) => {
+        const asked = decision.questions as unknown as { text: string }[] | { text: string } | null;
+        const question = Array.isArray(asked) ? (asked[0]?.text ?? null) : (asked?.text ?? null);
+        return { id: decision.id, text: decision.text, createdAt: decision.created_at, question };
+      }),
+      stats: {
+        tasks: {
+          todo: tasks.filter((task) => task.status === "todo").length,
+          in_progress: tasks.filter((task) => task.status === "in_progress").length,
+          done: tasks.filter((task) => task.status === "done").length,
+        },
+        openQuestions: threads.filter((thread) => thread.kind === "question" && thread.status === "open").length,
+        decisions: activeDecisions.length,
+        activeChats: chats.filter((chat) => chat.state === "active").length,
+      },
+      timeline: { from: starts[0] ?? new Date().toISOString(), items: items.slice(-MAP_TIMELINE_ITEMS) },
     };
   }
 

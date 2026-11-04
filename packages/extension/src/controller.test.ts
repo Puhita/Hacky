@@ -436,6 +436,135 @@ test("the map shows people, chats, handoffs and questions, and keeps agent quest
   assert.ok(alice.last().map.chats.some((item) => item.id === newChat));
 });
 
+const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+// A team of its own, so counts are exact. Alice leads it, and Bob joins from the first team.
+async function mapTeam(label: string) {
+  const teamId = await alice.api.createTeam(label, "Alice");
+  teamIds.add(teamId);
+  const { data: me } = await admin.from("members").select("user_id").eq("team_id", teamId).single();
+  const { data: bobRow } = await admin.from("members").select("user_id").eq("team_id", alice.last().team!.id).eq("display_name", "Bob").single();
+  assert.ifError((await admin.from("members").insert({ team_id: teamId, user_id: bobRow!.user_id, display_name: "Bob", role: "member" })).error);
+  return { teamId, aliceId: me!.user_id as string, bobId: bobRow!.user_id as string };
+}
+
+test("the map's tasks, decisions, stats and timeline reflect the team's work", async () => {
+  const { teamId, aliceId, bobId } = await mapTeam("Map stats");
+  const task = (title: string, status: string, ownerId: string | null, createdMinutesAgo: number, extra: Record<string, unknown> = {}) => ({
+    team_id: teamId, title, status, owner_id: ownerId, files: [], created_at: ago(createdMinutesAgo), updated_at: ago(createdMinutesAgo - 5), ...extra,
+  });
+  const tasks = [
+    task("Own todo", "todo", aliceId, 50, { files: ["a.ts"] }),
+    task("Own doing", "in_progress", aliceId, 60),
+    task(`Own long ${"y".repeat(200)}`, "in_progress", aliceId, 55),
+    task(`Own done ${"x".repeat(200)}`, "done", aliceId, 70),
+    task("Bob doing", "in_progress", bobId, 100),
+    task("Bob done one", "done", bobId, 90),
+    task("Bob done two", "done", bobId, 80),
+    task("Done by nobody", "done", null, 75),
+    ...Array.from({ length: 10 }, (_, index) => task(`Bob extra ${index}`, "todo", bobId, 90 - index * 5)),
+    ...Array.from({ length: 9 }, (_, index) => task(`Open ${index}`, "todo", null, 40 - index)),
+  ];
+  assert.ifError((await admin.from("tasks").insert(tasks)).error);
+
+  const decision = async (text: string, status: string, createdMinutesAgo: number) => {
+    const { data, error } = await admin
+      .from("decisions")
+      .insert({ team_id: teamId, text, decided_by: aliceId, status, created_at: ago(createdMinutesAgo) })
+      .select("id")
+      .single();
+    assert.ifError(error);
+    return data!.id as string;
+  };
+  await decision("Old way", "superseded", 250);
+  const decisionIds: string[] = [];
+  for (let index = 0; index < 6; index++) decisionIds.push(await decision(`Decision ${index}`, "active", 200 - index * 10));
+  const question = (text: string, extra: Record<string, unknown>, createdMinutesAgo: number) => ({
+    team_id: teamId, text, asked_by: aliceId, created_at: ago(createdMinutesAgo), ...extra,
+  });
+  assert.ifError(
+    (
+      await admin.from("questions").insert([
+        question("Which payment provider?", { status: "answered", decision_id: decisionIds[5] }, 145),
+        question("Open question one", { status: "open", decision_id: null }, 20),
+        question("Open question two", { status: "open", decision_id: null }, 10),
+      ])
+    ).error,
+  );
+  const session = (userId: string, fields: Record<string, unknown>) => admin.from("agent_sessions").insert({ team_id: teamId, user_id: userId, ...fields });
+  assert.ifError((await session(aliceId, { started_at: ago(360), last_seen_at: ago(359), closed_at: ago(359) })).error);
+  assert.ifError((await session(aliceId, { last_seen_at: ago(1) })).error);
+  assert.ifError((await session(bobId, { last_seen_at: ago(30) })).error);
+
+  const map = await alice.api.mapState(teamId);
+  const owner = (name: string) => map.owners.find((item) => item.name === name)!;
+
+  const aliceTitles = owner("Alice").tasks.map((item) => item.title);
+  assert.deepEqual([aliceTitles[0], aliceTitles[2]], ["Own todo", "Own doing"], "not done, newest first");
+  assert.equal(aliceTitles[1].length, 120, "a long title is shortened for the map");
+  assert.ok(aliceTitles[1].startsWith("Own long yyy") && aliceTitles[1].endsWith("…"));
+  assert.deepEqual(owner("Alice").tasks[0], { id: owner("Alice").tasks[0].id, title: "Own todo", status: "todo", files: ["a.ts"] });
+  assert.equal(owner("Alice").doneTasks, 1);
+  assert.equal(owner("Bob").tasks.length, 8, "a person's tasks are capped at 8");
+  assert.equal(owner("Bob").tasks[0].title, "Bob extra 9", "newest first");
+  assert.ok(!owner("Bob").tasks.some((item) => item.title === "Bob doing"), "the oldest ones are the ones dropped");
+  assert.equal(owner("Bob").doneTasks, 2);
+
+  assert.equal(map.unassigned.length, 8, "unassigned tasks are capped at 8");
+  assert.deepEqual(map.unassigned.map((item) => item.title).slice(0, 2), ["Open 8", "Open 7"]);
+  assert.ok(map.unassigned.every((item) => item.status === "todo"), "a done task nobody owned isn't unassigned");
+
+  assert.equal(map.decisions.length, 5, "the latest 5 active decisions");
+  assert.deepEqual(map.decisions.map((item) => item.text), ["Decision 5", "Decision 4", "Decision 3", "Decision 2", "Decision 1"]);
+  assert.equal(map.decisions[0].question, "Which payment provider?");
+  assert.equal(map.decisions[1].question, null);
+
+  assert.deepEqual(map.stats, {
+    tasks: { todo: 20, in_progress: 3, done: 4 },
+    openQuestions: 2,
+    decisions: 6,
+    activeChats: 1,
+  });
+
+  const kinds = (kind: string) => map.timeline.items.filter((item) => item.kind === kind);
+  assert.equal(kinds("task_done").length, 4);
+  assert.equal(kinds("decision").length, 7, "superseded decisions are on the timeline too");
+  assert.equal(kinds("question").length, 3);
+  assert.deepEqual(
+    map.timeline.items.map((item) => item.at),
+    [...map.timeline.items.map((item) => item.at)].sort(),
+    "oldest first",
+  );
+  const long = kinds("task_done").find((item) => item.label.startsWith("Own done"))!;
+  assert.equal(long.label.length, 120);
+  assert.ok(long.label.endsWith("…"));
+  assert.ok(Math.abs(Date.parse(map.timeline.from) - Date.parse(ago(360))) < 2000, "it starts with the earliest chat");
+});
+
+test("an empty team has an empty timeline that starts now, and the timeline keeps the newest 60", async () => {
+  const empty = await mapTeam("Map empty");
+  const before = Date.now();
+  const none = await alice.api.mapState(empty.teamId);
+  assert.deepEqual(none.timeline.items, []);
+  assert.ok(Math.abs(Date.parse(none.timeline.from) - before) < 10_000);
+  assert.deepEqual(none.stats, { tasks: { todo: 0, in_progress: 0, done: 0 }, openQuestions: 0, decisions: 0, activeChats: 0 });
+  assert.deepEqual([none.unassigned, none.decisions], [[], []]);
+
+  const busy = await mapTeam("Map busy");
+  const rows = Array.from({ length: 70 }, (_, index) => ({
+    team_id: busy.teamId, text: `Decision ${index}`, decided_by: busy.aliceId, status: "active", created_at: ago(700 - index * 10),
+  }));
+  assert.ifError((await admin.from("decisions").insert(rows)).error);
+  const map = await alice.api.mapState(busy.teamId);
+  assert.equal(map.timeline.items.length, 60);
+  assert.equal(map.timeline.items[0].label, "Decision 10");
+  assert.equal(map.timeline.items[59].label, "Decision 69");
+  assert.equal(map.stats.decisions, 70);
+  assert.equal(map.decisions.length, 5);
+  assert.equal(map.decisions[0].text, "Decision 69");
+  assert.ok(Math.abs(Date.parse(map.timeline.from) - Date.parse(ago(700))) < 2000, "from is the oldest item, even one that was cut from the list");
+});
+
 test("the openMap message asks the editor to open the map", async () => {
   let opened = 0;
   const viewer = sidebar("alice", workspace, { openMap: () => (opened += 1) });

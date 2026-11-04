@@ -278,7 +278,16 @@ export class SidebarController {
       feed: [],
       pulse: [],
       agentChat: [],
-      map: { project: "", owners: [], chats: [], threads: [] },
+      map: {
+        project: "",
+        owners: [],
+        chats: [],
+        threads: [],
+        unassigned: [],
+        decisions: [],
+        stats: { tasks: { todo: 0, in_progress: 0, done: 0 }, openQuestions: 0, decisions: 0, activeChats: 0 },
+        timeline: { from: "", items: [] },
+      },
       notice: this.notice,
       error: this.error,
     };

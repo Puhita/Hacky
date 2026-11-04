@@ -1,14 +1,24 @@
+/* Tuning: colours and speeds. Sizes and zoom limits are constants at the top of map.js. */
 :root {
   --map-question: var(--vscode-charts-blue, #3794ff);
   --map-assumption: var(--vscode-charts-yellow, #cca700);
   --map-agent: var(--vscode-charts-purple, #b180d7);
   --map-active: var(--vscode-charts-green, #89d185);
+  --map-done: var(--vscode-charts-green, #89d185);
+  --map-doing: var(--vscode-charts-orange, #d18616);
   --map-muted: var(--vscode-descriptionForeground);
+  --map-line: var(--vscode-panel-border, var(--vscode-descriptionForeground));
+  --map-flow-active: 0.7s;
+  --map-flow-idle: 3.5s;
+  --map-flow-thread: 0.9s;
+  --map-idle-opacity: 0.45;
+  --map-ended-opacity: 0.18;
 }
 
 body {
   margin: 0;
   padding: 0;
+  overflow: hidden;
   color: var(--vscode-foreground);
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
@@ -57,6 +67,11 @@ button.secondary:hover {
   background: var(--vscode-button-secondaryHoverBackground);
 }
 
+.zoom {
+  display: flex;
+  gap: 4px;
+}
+
 .legend {
   display: flex;
   gap: 12px;
@@ -73,8 +88,7 @@ button.secondary:hover {
   background: currentColor;
 }
 
-.key.question,
-.tag-question {
+.key.question {
   color: var(--map-question);
 }
 
@@ -86,18 +100,35 @@ button.secondary:hover {
   color: var(--map-agent);
 }
 
+.muted {
+  color: var(--map-muted);
+}
+
+/* Stage and world */
 .stage {
   position: relative;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  cursor: grab;
+  user-select: none;
+}
+
+.stage.dragging {
+  cursor: grabbing;
+}
+
+.world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
 }
 
 .scene {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  top: 0;
+  left: 0;
 }
 
 .empty {
@@ -114,16 +145,42 @@ button.secondary:hover {
   display: none;
 }
 
-/* Scene */
+/* Level of detail: lvN is shown from level N up (0 far, 1 medium, 2 close, 3 very close). */
+.lod-0 .lv1,
+.lod-0 .lv2,
+.lod-0 .lv3,
+.lod-1 .lv2,
+.lod-1 .lv3,
+.lod-2 .lv3 {
+  display: none;
+}
+
+/* Nodes */
 .project {
   fill: var(--vscode-button-background);
   stroke: var(--vscode-focusBorder, transparent);
   stroke-width: 2;
 }
 
+.ring-track,
+.ring-done {
+  fill: none;
+  stroke-width: 6;
+}
+
+.ring-track {
+  stroke: var(--map-line);
+  opacity: 0.4;
+}
+
+.ring-done {
+  stroke: var(--map-done);
+  stroke-linecap: round;
+}
+
 .person {
   fill: var(--vscode-badge-background);
-  stroke: var(--vscode-panel-border, var(--map-muted));
+  stroke: var(--map-line);
   stroke-width: 1.5;
 }
 
@@ -132,34 +189,40 @@ button.secondary:hover {
   stroke-width: 3;
 }
 
-.orbit {
-  fill: none;
-  stroke: var(--vscode-panel-border, var(--map-muted));
-  stroke-dasharray: 2 5;
-  opacity: 0.5;
-}
-
-.label {
+.initials {
   fill: var(--vscode-badge-foreground);
   font-size: 11px;
   font-weight: 600;
   pointer-events: none;
 }
 
-.project-label {
-  fill: var(--vscode-button-foreground);
-}
-
-.caption {
-  fill: var(--map-muted);
-  font-size: 10px;
+.label {
+  fill: var(--vscode-foreground);
+  font-size: 11px;
   pointer-events: none;
 }
 
-.edge {
-  stroke: var(--vscode-panel-border, var(--map-muted));
-  stroke-width: 1;
-  opacity: 0.6;
+.label.muted,
+.label.stat {
+  fill: var(--map-muted);
+  font-size: 10px;
+}
+
+.label.project-label {
+  fill: var(--vscode-button-foreground);
+  font-weight: 600;
+}
+
+.label.person-label {
+  font-weight: 600;
+}
+
+.label.idle {
+  opacity: 0.65;
+}
+
+.label.ended {
+  opacity: 0.35;
 }
 
 .chat {
@@ -169,36 +232,89 @@ button.secondary:hover {
 
 .chat.active {
   fill: var(--map-active);
-  animation: glow 2.4s ease-in-out infinite;
 }
 
 .chat.idle {
   fill: var(--map-muted);
-  opacity: 0.55;
+  opacity: var(--map-idle-opacity);
 }
 
 .chat.ended {
   fill: var(--map-muted);
-  opacity: 0.2;
+  opacity: var(--map-ended-opacity);
 }
 
-.chat-caption.idle {
-  opacity: 0.6;
+.task {
+  stroke: var(--vscode-editor-background);
+  stroke-width: 1.5;
+  fill: var(--map-muted);
 }
 
-.chat-caption.ended {
+.task.in_progress {
+  fill: var(--map-doing);
+}
+
+.task.unassigned {
+  fill: none;
+  stroke: var(--map-muted);
+  stroke-dasharray: 2 2;
+}
+
+.decision {
+  fill: var(--map-agent);
+  opacity: 0.85;
+}
+
+/* Links: always there and always flowing; speed and brightness follow activity. */
+.link {
+  fill: none;
+  stroke-width: 1.5;
+  stroke-dasharray: 5 7;
+  stroke: var(--map-line);
+  animation: flow var(--map-flow-idle) linear infinite;
+}
+
+.link.flow-active {
+  stroke: var(--map-active);
+  stroke-width: 2;
+  animation-duration: var(--map-flow-active);
+}
+
+.link.flow-idle {
+  opacity: var(--map-idle-opacity);
+}
+
+.link.flow-ended {
+  opacity: var(--map-ended-opacity);
+  animation: none;
+}
+
+.link.handoff {
+  stroke: var(--map-agent);
+}
+
+.link.project-task,
+.link.project-decision {
   opacity: 0.3;
 }
 
-.edge.chat-edge.ended {
-  opacity: 0.15;
+.link.thread-question,
+.link.thread-assumption,
+.link.thread-agent {
+  stroke-width: 2.5;
+  animation-duration: var(--map-flow-thread);
 }
 
-.flow {
+.link.thread-question {
+  stroke: var(--map-question);
+}
+
+.link.thread-assumption {
+  stroke: var(--map-assumption);
+}
+
+.link.thread-agent {
   stroke: var(--map-agent);
-  stroke-width: 2;
-  stroke-dasharray: 6 6;
-  animation: flow 1s linear infinite;
 }
 
 /* Transient effects */
@@ -222,7 +338,8 @@ button.secondary:hover {
 }
 
 .fx-line.answer,
-.fx-line.handoff {
+.fx-line.handoff,
+.fx-line.progress {
   stroke: var(--map-active);
 }
 
@@ -242,15 +359,17 @@ button.secondary:hover {
 /* Cards */
 .cards {
   position: absolute;
-  inset: 0;
-  pointer-events: none;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
 }
 
 .card {
   position: absolute;
   box-sizing: border-box;
   padding: 8px 10px;
-  pointer-events: auto;
+  cursor: default;
   border: 1px solid var(--vscode-panel-border, transparent);
   border-left-width: 4px;
   background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
@@ -270,12 +389,12 @@ button.secondary:hover {
   border-left-color: var(--map-agent);
 }
 
-.card.entering {
-  animation: pop 0.45s ease-out;
+.card.answered {
+  border-left-color: var(--map-done);
 }
 
-.card.answered {
-  border-left-color: var(--map-active);
+.card.entering {
+  animation: pop 0.45s ease-out;
 }
 
 .card.collapsing {
@@ -296,17 +415,28 @@ button.secondary:hover {
   letter-spacing: 0.05em;
 }
 
-.card-text {
+.card p {
   margin: 4px 0;
   overflow-wrap: anywhere;
 }
 
+/* Full text only when very close; clamped before that. */
+.card-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.lod-3 .card-text {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+
 .card-context,
 .card-answer {
-  margin: 2px 0;
   color: var(--map-muted);
   font-size: 0.85em;
-  overflow-wrap: anywhere;
 }
 
 .card-answer {
@@ -329,10 +459,78 @@ button.secondary:hover {
   border: 1px solid var(--vscode-input-border, transparent);
 }
 
-@keyframes glow {
-  50% {
-    opacity: 0.65;
-  }
+/* Timeline strip, outside the zoom */
+.timeline {
+  flex: none;
+  padding: 8px 16px 10px;
+  border-top: 1px solid var(--vscode-panel-border, transparent);
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 0.9em;
+}
+
+.bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--map-line) 40%, transparent);
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--map-done);
+}
+
+.axis {
+  position: relative;
+  height: 34px;
+  border-bottom: 1px solid var(--map-line);
+}
+
+.marker {
+  position: absolute;
+  bottom: -4px;
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  border-radius: 50%;
+  background: var(--map-muted);
+}
+
+.marker.task_done {
+  background: var(--map-done);
+}
+
+.marker.decision {
+  background: var(--map-agent);
+}
+
+.marker.question {
+  background: var(--map-question);
+}
+
+.marker-label {
+  position: absolute;
+  bottom: 8px;
+  max-width: 150px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  color: var(--map-muted);
+}
+
+.dates {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  font-size: 10px;
 }
 
 @keyframes flow {
