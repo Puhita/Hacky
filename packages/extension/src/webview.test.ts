@@ -23,9 +23,13 @@ function mount() {
   const send = (state: unknown) =>
     window.dispatchEvent(new window.MessageEvent("message", { data: state }));
   const root = window.document.getElementById("root");
+  // A button is found by its text, or by its label when it is an icon.
   const button = (text: string) =>
-    [...root.querySelectorAll("button")].find((node: any) => node.textContent === text) as any;
-  return { sent, send, window, root, button };
+    [...root.querySelectorAll("button")].find((node: any) => node.textContent === text || node.getAttribute("aria-label") === text) as any;
+  // The sidebar has three views, switched with the tabs.
+  const goTo = (label: string) =>
+    ([...root.querySelectorAll(".tab")] as any[]).find((tab) => tab.querySelector(".lbl").textContent === label).click();
+  return { sent, send, window, root, button, goTo };
 }
 
 const SIGNED_OUT = {
@@ -76,7 +80,7 @@ test("logging in sends the typed values, and empty fields send nothing", () => {
   button("Log in to Hacky").click();
   assert.deepEqual(sent[1], { type: "signIn", email: "a@example.com", password: "secret" });
 
-  // Signing up is the other tab of the same form, and keeps what was typed.
+  // Signing up is the same form, and keeps what was typed.
   button("Sign up").click();
   assert.equal(root.querySelector('[name="email"]').value, "a@example.com");
   assert.equal(button("Log in to Hacky"), undefined);
@@ -89,9 +93,9 @@ test("the password can be shown and hidden", () => {
   send(SIGNED_OUT);
   const password = root.querySelector('[name="password"]');
   assert.equal(password.type, "password");
-  button("Show").click();
+  button("Show password").click();
   assert.equal(password.type, "text");
-  button("Hide").click();
+  button("Hide password").click();
   assert.equal(password.type, "password");
 });
 
@@ -101,17 +105,22 @@ test("shows team choices when signed in without a team", () => {
   button("Team One").click();
   assert.deepEqual(sent[1], { type: "selectTeam", teamId: "t1" });
   root.querySelector('[name="code"]').value = "abc123";
-  const joinName = [...root.querySelectorAll('[name="displayName"]')].at(-1) as any;
-  joinName.value = "Alice";
+  const names = [...root.querySelectorAll('[name="displayName"]')] as any[];
+  names[0].value = "Alice";
   button("Join team").click();
   assert.deepEqual(sent[2], { type: "joinTeam", code: "abc123", displayName: "Alice" });
+  root.querySelector('[name="name"]').value = "New team";
+  names[1].value = "Alice";
+  button("Create team").click();
+  assert.deepEqual(sent[3], { type: "createTeam", name: "New team", displayName: "Alice" });
 });
 
 test("shows the inbox and sends an answer", () => {
   const { sent, send, root, button } = mount();
   send({ ...IN_TEAM, inbox: [QUESTION] });
   assert.match(root.textContent, /What discount\?/);
-  assert.match(root.textContent, /From Bob\. 2 agents waiting\./);
+  assert.match(root.textContent, /Bob/);
+  assert.match(root.textContent, /2 agents waiting/);
   assert.match(root.textContent, /For you/);
   button("Send answer").click();
   assert.equal(sent.length, 1, "an empty answer isn't sent");
@@ -120,9 +129,31 @@ test("shows the inbox and sends an answer", () => {
   assert.deepEqual(sent[1], { type: "answer", questionId: "q1", text: "17%" });
 });
 
+test("the status strip and the tab count what needs the person", () => {
+  const { send, root } = mount();
+  send({
+    ...IN_TEAM,
+    inbox: [QUESTION, { ...QUESTION, id: "q2", waiting: 1 }],
+    pulse: [{ name: "Alice", me: true, chats: 2, focus: [], updates: 0, latest: [] }],
+  });
+  const tiles = [...root.querySelectorAll(".tile")].map((tile: any) => tile.textContent);
+  assert.deepEqual(tiles, ["2need you", "2working", "3waiting"]);
+  assert.ok(root.querySelector(".tile.hot"), "the need-you tile stands out");
+  assert.equal(root.querySelector(".tab.on .lbl").textContent, "Needs you");
+});
+
+test("with nothing waiting the Needs you view says all clear", () => {
+  const { sent, send, root } = mount();
+  send(IN_TEAM);
+  assert.match(root.textContent, /No open questions\. All clear\./);
+  assert.equal(root.querySelector(".tile.hot"), null);
+  (root.querySelector(".empty .btn") as any).click();
+  assert.deepEqual(sent[1], { type: "openBoard" });
+});
+
 test("teammate and agent text can't inject HTML", () => {
   const attack = '<img src=x onerror="window.hacked=true"><script>window.hacked=true</script>';
-  const { send, root, window } = mount();
+  const { send, root, window, goTo } = mount();
   send({
     ...IN_TEAM,
     team: { ...TEAM, name: attack },
@@ -131,9 +162,14 @@ test("teammate and agent text can't inject HTML", () => {
     decisions: [{ ...DECISION, text: attack, question: attack, author: attack }],
     tasks: [{ id: "t1", title: attack, status: "todo", files: [attack], owner: attack }],
     feed: [{ id: "e1", summary: attack, files: [attack], created_at: "2026-11-02T10:00:00Z", author: attack }],
+    pulse: [{ name: attack, me: false, chats: 1, focus: [attack], updates: 1, latest: [attack] }],
+    agentChat: [{ id: "p1", direction: "outgoing", other: attack, question: attack, context: attack, answer: attack, answered_by_agent: false, created_at: "2026-11-02T10:00:00Z" }],
     error: attack,
   });
-  assert.equal(root.querySelectorAll("img, script").length, 0);
+  for (const label of ["Needs you", "Team", "Tasks"]) {
+    goTo(label);
+    assert.equal(root.querySelectorAll("img, script").length, 0, label);
+  }
   assert.equal(window.hacked, undefined);
   assert.ok(root.textContent.includes("<img src=x"));
 });
@@ -198,34 +234,35 @@ test("an out-of-date folder offers Update setup, which sends the same connect me
 test("an assumption can be confirmed, or rejected with a reason", () => {
   const { sent, send, root, button } = mount();
   send({ ...IN_TEAM, assumptions: [ASSUMPTION] });
-  assert.match(root.textContent, /Assumptions\s*1/);
+  assert.match(root.textContent, /Agents are proceeding on\s*1/);
   assert.match(root.textContent, /10% off/);
   assert.match(root.textContent, /Assumed by Bob, for: What discount\?/);
   button("Confirm").click();
   assert.deepEqual(sent[1], { type: "confirmAssumption", assumptionId: "a1" });
 
-  button("Reject").click();
+  assert.equal(root.querySelector("#reason-a1"), null, "the reason box opens on Reject");
+  button("Reject…").click();
+  assert.ok(root.querySelector("#reason-a1"));
+  button("Reject and notify").click();
   assert.equal(sent.length, 2, "a rejection needs a reason");
   root.querySelector("#reason-a1").value = "It's 17%";
-  button("Reject").click();
+  button("Reject and notify").click();
   assert.deepEqual(sent[2], { type: "rejectAssumption", assumptionId: "a1", reason: "It's 17%" });
 });
 
-test("a decision can be replaced or withdrawn, and its controls stay open through a refresh", () => {
-  const { sent, send, root, button, window } = mount();
+test("a decision can be replaced or withdrawn, and its change box stays open through a refresh", () => {
+  const { sent, send, root, button, goTo, window } = mount();
   send({ ...IN_TEAM, decisions: [DECISION] });
+  goTo("Team");
   assert.match(root.textContent, /Decisions\s*1/);
   assert.match(root.textContent, /Decided by Alice\./);
-  const details = root.querySelector("details.actions");
-  assert.equal(details.open, false, "collapsed, since these notify the whole team");
+  assert.equal(root.querySelector("#decision-d1"), null, "closed, since these notify the whole team");
 
-  details.open = true;
-  details.dispatchEvent(new window.Event("toggle"));
+  button("Change").click();
   const area = root.querySelector("#decision-d1");
   area.value = "half typed";
   area.dispatchEvent(new window.Event("input"));
   send({ ...IN_TEAM, decisions: [DECISION] });
-  assert.equal(root.querySelector("details.actions").open, true);
   assert.equal(root.querySelector("#decision-d1").value, "half typed");
 
   root.querySelector("#decision-d1").value = "20% off";
@@ -235,39 +272,69 @@ test("a decision can be replaced or withdrawn, and its controls stay open throug
   assert.deepEqual(sent[2], { type: "withdrawDecision", decisionId: "d1" });
 });
 
-test("every section and card can be folded, and each fold keeps its own choice", () => {
-  const { send, root, window } = mount();
-  const state = { ...IN_TEAM, inbox: [QUESTION], assumptions: [ASSUMPTION], decisions: [DECISION] };
+test("cards and sections fold, Collapse all and Expand all fold them together, and the choices are remembered", () => {
+  const { send, root, button, goTo } = mount();
+  const state = { ...IN_TEAM, inbox: [QUESTION], assumptions: [ASSUMPTION] };
   send(state);
-  const folds = () => [...root.querySelectorAll("details.section-fold, details.card-fold")] as any[];
-  const named = (title: string) => folds().find((node) => node.textContent.startsWith(title));
-  assert.ok(folds().length >= 8, "each section and each card has a fold");
-  assert.equal(root.querySelector("details.section-fold").parentElement.className, "panel", "a section is one boxed fold");
+  const folds = () => [...root.querySelectorAll(".card-h[aria-expanded], .sec-h[aria-expanded]")] as any[];
+  const open = (node: any) => node.getAttribute("aria-expanded") === "true";
+  assert.equal(root.querySelector(".card-h .hl").textContent, "What discount?", "a card's headline is on its header");
+  assert.equal(open(folds()[0]), true, "a waiting question starts open");
 
-  assert.equal(named("Inbox").open, true, "a section with something waiting starts open");
-  assert.equal(named("Agent questions").open, false, "an empty section starts folded");
-  assert.equal(named("Decisions").open, false, "settled decisions start folded");
-  assert.equal(named("Live feed").open, false, "the feed starts folded");
-  assert.match(named("Inbox").querySelector(".count").textContent, /^1$/, "the count is a badge on the title");
-  assert.equal(root.querySelector(".card-title").textContent, "What discount?", "a card's headline is on its summary line");
-
-  named("Inbox").open = false;
-  named("Inbox").dispatchEvent(new window.Event("toggle"));
+  folds()[0].click();
+  assert.equal(open(folds()[0]), false);
   send(state);
-  assert.equal(named("Inbox").open, false, "a folded section stays folded through a refresh");
-  assert.equal(named("Assumptions").open, true, "the other sections are untouched");
+  assert.equal(open(folds()[0]), false, "a folded card stays folded through a refresh");
+
+  goTo("Team");
+  assert.equal(folds().find((node) => node.textContent.startsWith("Decisions")).getAttribute("aria-expanded"), "false", "settled decisions start folded");
+  assert.equal(folds().find((node) => node.textContent.startsWith("Live feed")).getAttribute("aria-expanded"), "false", "the feed starts folded");
+  button("Expand all").click();
+  assert.ok(folds().every(open));
+  button("Collapse all").click();
+  assert.ok(folds().every((node) => !open(node)));
+  assert.ok(button("Expand all"), "the button flips back");
+});
+
+test("the chosen view is remembered", () => {
+  const { send, root, goTo } = mount();
+  send(IN_TEAM);
+  goTo("Tasks");
+  assert.equal(root.querySelector(".tab.on .lbl").textContent, "Tasks");
+  send({ ...IN_TEAM, workspace: "connected" });
+  assert.equal(root.querySelector(".tab.on .lbl").textContent, "Tasks", "a refresh keeps the view");
 });
 
 test("the sidebar has buttons for the board and the map", () => {
   const { sent, send, button } = mount();
   send(IN_TEAM);
   button("Open board").click();
-  button("Open team map").click();
+  button("Open map").click();
   assert.deepEqual(sent.slice(1), [{ type: "openBoard" }, { type: "openMap" }]);
 });
 
+test("the Team view has a Map card with its own Open map button", () => {
+  const { sent, send, root, goTo } = mount();
+  send({ ...IN_TEAM, pulse: [{ name: "Alice", me: true, chats: 1, focus: ["Login form"], updates: 0, latest: [] }] });
+  goTo("Team");
+  assert.ok(root.querySelector(".mapcard svg.mini"));
+  const open = [...root.querySelectorAll(".mapcard button")].find((node: any) => node.textContent === "Open map") as any;
+  open.click();
+  assert.deepEqual(sent.at(-1), { type: "openMap" });
+});
+
+test("the invite code can be copied", () => {
+  const { send, root, button, window } = mount();
+  let copied = "";
+  Object.defineProperty(window.navigator, "clipboard", { value: { writeText: (text: string) => (copied = text) } });
+  send(IN_TEAM);
+  assert.match(root.querySelector(".inv").textContent, /abc123/);
+  button("Copy invite code").click();
+  assert.equal(copied, "abc123");
+});
+
 test("the task board groups tasks by status, and a task can be added", () => {
-  const { sent, send, root, button } = mount();
+  const { sent, send, root, button, goTo } = mount();
   send({
     ...IN_TEAM,
     tasks: [
@@ -276,10 +343,11 @@ test("the task board groups tasks by status, and a task can be added", () => {
       { id: "3", title: "Ship it", status: "done", files: [], owner: "Alice" },
     ],
   });
+  goTo("Tasks");
   const columns = [...root.querySelectorAll(".task-column")].map((column: any) => column.textContent);
-  assert.match(columns[0], /To do \(1\)Plan it/);
-  assert.match(columns[1], /In progress \(1\)Build itBob · src\/a\.ts/);
-  assert.match(columns[2], /Done \(1\)Ship itAlice/);
+  assert.match(columns[0], /To do\s*1.*Plan it/);
+  assert.match(columns[1], /In progress\s*1.*Build it.*Bob.*src\/a\.ts/);
+  assert.match(columns[2], /Done\s*1.*Ship it.*Alice/);
 
   button("Add task").click();
   assert.equal(sent.length, 1, "an empty task isn't sent");
@@ -289,8 +357,9 @@ test("the task board groups tasks by status, and a task can be added", () => {
 });
 
 test("the feed shows who did what", () => {
-  const { send, root } = mount();
+  const { send, root, goTo } = mount();
   send({ ...IN_TEAM, feed: [{ id: "e1", summary: "Fixed average", files: ["src/math.js"], created_at: "2026-11-02T10:00:00Z", author: "Bob" }] });
+  goTo("Team");
   assert.match(root.textContent, /Fixed average/);
   assert.match(root.textContent, /Bob/);
   assert.match(root.textContent, /src\/math\.js/);
@@ -317,13 +386,13 @@ test("a teammate's agent question can be answered from the sidebar, and answered
       { ...INCOMING, id: "p3", direction: "outgoing", question: "Who owns auth?" },
     ],
   });
-  assert.match(root.textContent, /Agent questions\s*1/);
   assert.match(root.textContent, /Orlin's agent asks/);
   assert.match(root.textContent, /Which fields does \/users return\?/);
   assert.match(root.textContent, /Your agent asked Orlin/);
   assert.match(root.textContent, /Answered by their agent\./);
   assert.match(root.textContent, /Waiting for Orlin\./);
   assert.equal(root.querySelectorAll("textarea").length, 1, "only the open question sent to this person has an answer box");
+  assert.equal(root.querySelector(".tile.hot .hx b").textContent, "1", "it counts as needing the person");
 
   button("Send answer to agent").click();
   assert.equal(sent.length, 1, "an empty answer isn't sent");
@@ -332,8 +401,8 @@ test("a teammate's agent question can be answered from the sidebar, and answered
   assert.deepEqual(sent[1], { type: "answerTeammate", questionId: "p1", text: "id, name, email" });
 });
 
-test("the team pulse shows live chats, what they are doing, and recent progress", () => {
-  const { send, root } = mount();
+test("the team view shows live chats, what they are doing, and recent progress", () => {
+  const { send, root, goTo } = mount();
   send({
     ...IN_TEAM,
     pulse: [
@@ -341,10 +410,11 @@ test("the team pulse shows live chats, what they are doing, and recent progress"
       { name: "Orlin", me: false, chats: 0, focus: [], updates: 3, latest: ["Finished the users API"] },
     ],
   });
+  goTo("Team");
   assert.match(root.textContent, /Alice \(you\)/);
   assert.match(root.textContent, /2 chats active/);
-  assert.match(root.textContent, /Now: Login form/);
-  assert.match(root.textContent, /No chat active/);
+  assert.match(root.textContent, /Login form/);
   assert.match(root.textContent, /3 updates in the last hour/);
   assert.match(root.textContent, /Finished the users API/);
+  assert.equal(root.querySelectorAll(".av .pd.live").length, 1, "only Alice has a live dot");
 });

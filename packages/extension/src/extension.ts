@@ -2,7 +2,8 @@ import { randomBytes } from "node:crypto";
 import { defaultCredentialsFile } from "hacky-mcp-server/credentials";
 import * as vscode from "vscode";
 import { confirmationUrl, HackyApi } from "./api.js";
-import { SidebarController, type Message } from "./controller.js";
+import { attentionCount, statusText } from "./attention.js";
+import { SidebarController, type Message, type SidebarState } from "./controller.js";
 
 declare const __SUPABASE_URL__: string;
 declare const __SUPABASE_PUBLISHABLE_KEY__: string;
@@ -18,10 +19,40 @@ class HackyUi {
   private mapPanel: vscode.WebviewPanel | undefined;
   private boardPanel: vscode.WebviewPanel | undefined;
 
+  private sidebarView: vscode.WebviewView | undefined;
+  private readonly statusBar: vscode.StatusBarItem;
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly api: HackyApi,
-  ) {}
+  ) {
+    this.statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+    this.statusBar.command = "hacky.sidebar.focus";
+    context.subscriptions.push(this.statusBar);
+  }
+
+  // The sidebar's own view carries the activity bar badge.
+  setSidebarView(view: vscode.WebviewView | undefined): void {
+    this.sidebarView = view;
+    if (!view) this.statusBar.hide();
+  }
+
+  // One number, three places: the activity bar badge, the status bar and the sidebar's strip.
+  private showAttention(state: SidebarState): void {
+    if (!state.user || !state.team) {
+      this.statusBar.hide();
+      if (this.sidebarView) this.sidebarView.badge = undefined;
+      return;
+    }
+    const count = attentionCount(state);
+    this.statusBar.text = `$(hubot) ${statusText(count)}`;
+    this.statusBar.tooltip = count === 0 ? "Nothing is waiting for you" : "Open Hacky to answer";
+    this.statusBar.backgroundColor = count > 0 ? new vscode.ThemeColor("statusBarItem.warningBackground") : undefined;
+    this.statusBar.show();
+    if (this.sidebarView) {
+      this.sidebarView.badge = count > 0 ? { value: count, tooltip: `${count} need you` } : undefined;
+    }
+  }
 
   private createController(): SidebarController {
     return new SidebarController({
@@ -31,7 +62,10 @@ class HackyUi {
       workspaceDir: () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null,
       loadTeamId: () => this.context.workspaceState.get<string>(TEAM_KEY),
       saveTeamId: (teamId) => void this.context.workspaceState.update(TEAM_KEY, teamId),
-      post: (state) => this.webviews.forEach((webview) => void webview.postMessage(state)),
+      post: (state) => {
+        this.webviews.forEach((webview) => void webview.postMessage(state));
+        this.showAttention(state);
+      },
       digestMinutes: () => vscode.workspace.getConfiguration("hacky").get<number>("progressDigestMinutes", 30),
       loadDigestAt: () => this.context.workspaceState.get<number>(DIGEST_KEY),
       saveDigestAt: (at) => void this.context.workspaceState.update(DIGEST_KEY, at),
@@ -140,7 +174,11 @@ class SidebarProvider implements vscode.WebviewViewProvider {
     view.webview.options = { enableScripts: true, localResourceRoots: [mediaUri] };
     view.webview.html = this.ui.html(view.webview, mediaUri, "sidebar");
     const attachment = this.ui.attach(view.webview);
-    view.onDidDispose(() => attachment.dispose());
+    this.ui.setSidebarView(view);
+    view.onDidDispose(() => {
+      attachment.dispose();
+      this.ui.setSidebarView(undefined);
+    });
   }
 }
 
