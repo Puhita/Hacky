@@ -43,9 +43,12 @@
     chevron: ["M4 6l4 4 4-4"],
     arrow: ["M3 8h10M9 4l4 4-4 4"],
     check: ["M3 8.5l3.2 3L13 4.5"],
+    plus: ["M8 3v10M3 8h10"],
     close: ["M4 4l8 8M12 4l-8 8"],
     folder: ["M2 4.5h4l1.2 1.5H14v6.5H2z"],
     eye: ["M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z", "M10 8a2 2 0 11-4 0 2 2 0 014 0z"],
+    gear: ["M8 10.3a2.3 2.3 0 100-4.6 2.3 2.3 0 000 4.6z", "M8 1.6l1 1.7 1.9-.4.6 1.9 1.8.9-.8 1.8.8 1.8-1.8.9-.6 1.9-1.9-.4-1 1.7-1-1.7-1.9.4-.6-1.9-1.8-.9.8-1.8-.8-1.8 1.8-.9.6-1.9 1.9.4z"],
+    back: ["M13 8H3M7 4L3 8l4 4"],
     eyeOff: ["M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z", "M10 8a2 2 0 11-4 0 2 2 0 014 0z", "M3 13L13 3"],
   };
   function icon(name, className = "") {
@@ -85,6 +88,8 @@
     return `${Math.round(minutes / 1440)}d`;
   }
 
+  const firstLetter = (name) => Array.from(name.trim())[0]?.toUpperCase() ?? "?";
+
   const initials = (name) =>
     name
       .split(/\s+/)
@@ -113,6 +118,9 @@
   const saved = vscode.getState() ?? {};
   const folds = { ...(saved.folds ?? {}) };
   let view = ["needs", "team", "tasks"].includes(saved.view) ? saved.view : "needs";
+  // A full-screen page over the views: null, "groups", "settings" (this group) or "profile".
+  let page = null;
+  const confirming = new Set(); // keys of two-step buttons that are waiting for their second click
   const persist = () => vscode.setState({ folds, view });
 
   const drafts = new Map(); // half-typed text, by field id
@@ -204,12 +212,19 @@
 
   // Log in and Sign up share one form. What was typed survives switching.
   let authMode = "login";
-  const authValues = { email: "", password: "" };
+  const authValues = { email: "", password: "", confirm: "" };
+  let authError = null; // a problem found in the form itself, before anything is sent
 
   function authField(name, label, type, autocomplete) {
     const input = el("input", { type, name, id: `auth-${name}`, class: "in", autocomplete, placeholder: label });
     input.value = authValues[name];
-    input.oninput = () => (authValues[name] = input.value);
+    input.oninput = () => {
+      authValues[name] = input.value;
+      if (authError) {
+        authError = null;
+        document.getElementById("auth-error")?.remove();
+      }
+    };
     return { input, field: el("div", { class: "field" }, [el("label", { class: "lab", for: `auth-${name}`, text: label }), input]) };
   }
 
@@ -217,11 +232,14 @@
     const signingUp = authMode === "signup";
     const email = authField("email", "Email", "email", "email");
     const password = authField("password", "Password", "password", signingUp ? "new-password" : "current-password");
-    password.input.classList.add("pw-in");
+    // Signing up asks for the password twice, so a typing slip can't lock the person out.
+    const confirm = signingUp ? authField("confirm", "Repeat password", "password", "new-password") : null;
+    const boxes = [password, confirm].filter(Boolean);
+    for (const box of boxes) box.input.classList.add("pw-in");
     const toggle = el("button", { type: "button", class: "ib pw-toggle", "aria-label": "Show password", title: "Show password" }, [icon("eye")]);
     toggle.onclick = () => {
       const hidden = password.input.type === "password";
-      password.input.type = hidden ? "text" : "password";
+      for (const box of boxes) box.input.type = hidden ? "text" : "password";
       toggle.replaceChildren(icon(hidden ? "eyeOff" : "eye"));
       toggle.setAttribute("aria-label", hidden ? "Hide password" : "Show password");
       toggle.title = hidden ? "Hide password" : "Show password";
@@ -230,7 +248,16 @@
 
     const submit = () => {
       if (authValues.email.trim() === "" || authValues.password.trim() === "") return;
-      vscode.postMessage({ type: signingUp ? "signUp" : "signIn", email: authValues.email, password: authValues.password });
+      if (signingUp && authValues.password !== authValues.confirm) {
+        authError = authValues.confirm === "" ? "Repeat the password in the second box." : "The two passwords don't match.";
+        if (lastState) render(lastState);
+        return;
+      }
+      vscode.postMessage(
+        signingUp
+          ? { type: "signUp", email: authValues.email, password: authValues.password, confirmPassword: authValues.confirm }
+          : { type: "signIn", email: authValues.email, password: authValues.password },
+      );
     };
     const modeTab = (mode, label) =>
       el("button", {
@@ -242,6 +269,7 @@
         onclick: () => {
           if (authMode === mode) return;
           authMode = mode;
+          authError = null;
           if (lastState) render(lastState);
         },
       });
@@ -256,6 +284,8 @@
       el("form", { class: "auth-form", onsubmit: (event) => (event.preventDefault(), submit()) }, [
         email.field,
         password.field,
+        confirm ? confirm.field : null,
+        authError ? el("p", { class: "error inline", id: "auth-error", role: "alert", text: authError }) : null,
         el("button", { type: "submit", class: "btn cta full" }, [document.createTextNode(signingUp ? "Create account" : "Log in to Hacky"), icon("arrow")]),
       ]),
     ]);
@@ -264,23 +294,55 @@
   // A form of text fields and buttons. A button sends only when every field is filled.
   function form(fields, buttons) {
     const inputs = {};
-    const rows = fields.map(({ name, label, mono = false }) => {
+    const rows = fields.map(({ name, label, mono = false, value = "" }) => {
       inputs[name] = el("input", { type: "text", class: `in${mono ? " mono-in" : ""}`, "aria-label": label, placeholder: label, name });
+      inputs[name].value = value;
       return inputs[name];
     });
     const values = () => Object.fromEntries(Object.entries(inputs).map(([name, input]) => [name, input.value]));
-    const row = buttons.map(({ label, className, send }) =>
-      el("button", {
-        type: "button",
-        class: `btn ${className} full`,
-        text: label,
-        onclick: () => {
-          const current = values();
-          if (fields.every(({ name }) => current[name].trim() !== "")) vscode.postMessage(send(current));
+    const row = buttons.map(({ label, className, send, icon: iconName }) =>
+      el(
+        "button",
+        {
+          type: "button",
+          class: `btn ${className} full`,
+          onclick: () => {
+            const current = values();
+            if (fields.every(({ name }) => current[name].trim() !== "")) vscode.postMessage(send(current));
+          },
         },
-      }),
+        [iconName ? icon(iconName) : null, document.createTextNode(label)],
+      ),
     );
     return el("form", { class: "form", onsubmit: (event) => event.preventDefault() }, [...rows, ...row]);
+  }
+
+  // Join with a code, or start a new group. Shared by the team choice and the groups page.
+  function joinAndCreate(state) {
+    const name = state.user?.displayName ?? "";
+    return [
+      el("div", { class: "opt" }, [
+        el("h2", { text: "Join with an invite code" }),
+        form(
+          [
+            { name: "code", label: "Invite code", mono: true },
+            { name: "displayName", label: "Your name", value: name },
+          ],
+          [{ label: "Join team", className: "sec", send: (values) => ({ type: "joinTeam", ...values }) }],
+        ),
+      ]),
+      el("div", { class: "or", text: "or" }),
+      el("div", { class: "opt" }, [
+        el("h2", { text: "Create a team" }),
+        form(
+          [
+            { name: "name", label: "Team name" },
+            { name: "displayName", label: "Your name", value: name },
+          ],
+          [{ label: "Create team", className: "sec", send: (values) => ({ type: "createTeam", ...values }) }],
+        ),
+      ]),
+    ];
   }
 
   function renderTeamChoice(state) {
@@ -302,27 +364,7 @@
             ),
           ])
         : null,
-      el("div", { class: "opt" }, [
-        el("h2", { text: "Join with an invite code" }),
-        form(
-          [
-            { name: "code", label: "Invite code", mono: true },
-            { name: "displayName", label: "Your name" },
-          ],
-          [{ label: "Join team", className: "pri", send: (values) => ({ type: "joinTeam", ...values }) }],
-        ),
-      ]),
-      el("div", { class: "or", text: "or" }),
-      el("div", { class: "opt" }, [
-        el("h2", { text: "Create a team" }),
-        form(
-          [
-            { name: "name", label: "Team name" },
-            { name: "displayName", label: "Your name" },
-          ],
-          [{ label: "Create team", className: "sec", send: (values) => ({ type: "createTeam", ...values }) }],
-        ),
-      ]),
+      ...joinAndCreate(state),
     ]);
   }
 
@@ -668,7 +710,7 @@
 
   function renderTasksView(state) {
     return [
-      form([{ name: "title", label: "New task" }], [{ label: "Add task", className: "pri", send: (values) => ({ type: "addTask", ...values }) }]),
+      form([{ name: "title", label: "New task" }], [{ label: "Add task", className: "add", icon: "plus", send: (values) => ({ type: "addTask", ...values }) }]),
       ...TASK_COLUMNS.map(([status, title, kind]) => {
         const tasks = state.tasks.filter((task) => task.status === status);
         const section = foldSection(
@@ -698,6 +740,217 @@
         return section;
       }),
     ];
+  }
+
+  // ---- Pages: groups, group settings and profile ----
+
+  function setPage(next) {
+    page = next;
+    confirming.clear();
+    if (lastState) render(lastState);
+  }
+
+  function pageFrame(title, children) {
+    return el("section", { class: "page" }, [
+      el("div", { class: "page-h" }, [iconButton("Back", "back", () => setPage(null)), el("h1", { class: "tr", text: title })]),
+      ...children.filter(Boolean),
+    ]);
+  }
+
+  // A labelled box that keeps what was typed across re-renders. Read it back with drafts.get(id).
+  function draftInput(id, label, { type = "text", autocomplete = "off", fallback = "" } = {}) {
+    const input = el("input", { type, id, class: "in", "aria-label": label, placeholder: label, autocomplete });
+    input.value = drafts.get(id) ?? fallback;
+    input.oninput = () => drafts.set(id, input.value);
+    return el("div", { class: "field" }, [el("label", { class: "lab", for: id, text: label }), input]);
+  }
+
+  const draftValue = (id, fallback = "") => (drafts.get(id) ?? fallback).trim();
+
+  // A button that needs a second click, so a destructive action can't happen by accident.
+  function confirmButton(key, label, confirmLabel, className, onConfirm) {
+    const armed = confirming.has(key);
+    return el("button", {
+      type: "button",
+      class: className,
+      text: armed ? confirmLabel : label,
+      onclick: () => {
+        if (!armed) {
+          confirming.add(key);
+          render(lastState);
+          return;
+        }
+        confirming.delete(key);
+        onConfirm();
+      },
+    });
+  }
+
+  const roleName = (role) => (role === "lead" ? "Lead" : "Member");
+
+  function renderGroupsPage(state) {
+    return pageFrame("Your groups", [
+      state.teams.length === 0
+        ? el("p", { class: "muted", text: "You aren't in any group yet. Join one with an invite code, or create your own." })
+        : el(
+            "div",
+            { class: "glist" },
+            state.teams.map((team) => {
+              const current = state.team?.id === team.id;
+              return el("div", { class: `gcard${current ? " cur" : ""}` }, [
+                el("div", { class: "ch" }, [
+                  el("span", { class: "hl tr plain", text: team.name }),
+                  el("span", { class: "meta tight" }, [el("span", { class: "tr", text: `${plural(team.members, "member")} · ${roleName(team.role)}${current ? " · current" : ""}` })]),
+                ]),
+                current
+                  ? el("button", { type: "button", class: "btn sec sm", text: "Settings", onclick: () => setPage("settings") })
+                  : el("button", {
+                      type: "button",
+                      class: "btn sec sm",
+                      text: "Open",
+                      onclick: () => {
+                        setPage(null);
+                        vscode.postMessage({ type: "selectTeam", teamId: team.id });
+                      },
+                    }),
+              ]);
+            }),
+          ),
+      ...joinAndCreate(state),
+    ]);
+  }
+
+  function renderMemberRow(member, index, canManage, teamId) {
+    const actions =
+      canManage && !member.me
+        ? el("div", { class: "macts" }, [
+            el("button", {
+              type: "button",
+              class: "lnk",
+              text: member.role === "lead" ? "Make member" : "Make lead",
+              onclick: () => vscode.postMessage({ type: "setRole", userId: member.id, role: member.role === "lead" ? "member" : "lead" }),
+            }),
+            confirmButton(`remove-${teamId}-${member.id}`, "Remove", "Sure?", "lnk danger", () => vscode.postMessage({ type: "removeMember", userId: member.id })),
+          ])
+        : null;
+    return el("div", { class: "mrow" }, [
+      el("span", { class: `av a${(index % 4) + 1}`, text: initials(member.name) }),
+      el("div", { class: "ch" }, [
+        el("span", { class: "hl tr plain", text: member.me ? `${member.name} (you)` : member.name }),
+        el("span", { class: "meta tight" }, [el("span", { class: `role ${member.role}`, text: roleName(member.role) })]),
+      ]),
+      actions,
+    ]);
+  }
+
+  function renderSettingsPage(state) {
+    const team = state.team;
+    const lead = team.role === "lead";
+    const nameId = `rename-${team.id}`;
+    const deleteId = `delete-${team.id}`;
+    const rename = () => {
+      const name = draftValue(nameId, team.name);
+      if (name === "" || name === team.name) return;
+      drafts.delete(nameId);
+      vscode.postMessage({ type: "renameTeam", name });
+    };
+    const deleteInput = lead ? draftInput(deleteId, `Type "${team.name}" to delete this group`) : null;
+    const deleteButton = lead ? el("button", { type: "button", class: "btn danger", text: "Delete group" }) : null;
+    if (deleteButton) {
+      const matches = () => draftValue(deleteId) === team.name;
+      deleteButton.disabled = !matches();
+      deleteInput.querySelector("input").addEventListener("input", () => (deleteButton.disabled = !matches()));
+      deleteButton.onclick = () => {
+        if (!matches()) return;
+        drafts.delete(deleteId);
+        setPage(null);
+        vscode.postMessage({ type: "deleteTeam" });
+      };
+    }
+    return pageFrame("Group settings", [
+      lead ? null : el("p", { class: "hint", text: "You're a member. Only a lead can rename the group, manage people or delete it." }),
+      el("div", { class: "opt" }, [
+        el("h2", { text: "Name" }),
+        lead
+          ? el("form", { class: "form", onsubmit: (event) => (event.preventDefault(), rename()) }, [
+              draftInput(nameId, "Group name", { fallback: team.name }),
+              el("button", { type: "submit", class: "btn pri full", text: "Save name" }),
+            ])
+          : el("p", { text: team.name }),
+      ]),
+      el("div", { class: "opt" }, [
+        el("h2", { text: "Invite people" }),
+        el("p", { class: "hint", text: "Share this code. Anyone who has it can join the group as a member." }),
+        el("div", { class: "inv" }, [
+          el("code", { class: "inv-c", text: team.invite_code }),
+          iconButton("Copy invite code", "copy", () => navigator.clipboard.writeText(team.invite_code), "sm"),
+        ]),
+        lead ? confirmButton(`invite-${team.id}`, "Make a new code", "Replace it? The old code stops working", "btn sec", () => vscode.postMessage({ type: "regenerateInvite" })) : null,
+      ]),
+      el("div", { class: "opt" }, [
+        el("h2", { text: `Members (${state.members.length})` }),
+        el("div", { class: "mlist" }, state.members.map((member, index) => renderMemberRow(member, index, lead, team.id))),
+      ]),
+      el("div", { class: "opt danger-zone" }, [
+        el("h2", { text: "Leave or delete" }),
+        confirmButton(`leave-${team.id}`, "Leave group", "Leave for good?", "btn ghost", () => {
+          setPage(null);
+          vscode.postMessage({ type: "leaveTeam" });
+        }),
+        lead ? el("p", { class: "hint", text: "If you are the only lead, make someone else a lead before you leave." }) : null,
+        lead ? deleteInput : null,
+        lead ? el("p", { class: "hint", text: "Deleting removes the group, its tasks, decisions and history for everyone. It can't be undone." }) : null,
+        deleteButton,
+      ]),
+    ]);
+  }
+
+  function renderProfilePage(state) {
+    const name = state.user.displayName;
+    const saveName = () => {
+      const value = draftValue("profile-name", name ?? "");
+      if (value === "" || value === name) return;
+      drafts.delete("profile-name");
+      vscode.postMessage({ type: "updateProfile", displayName: value });
+    };
+    const savePassword = () => {
+      const password = drafts.get("profile-password") ?? "";
+      const confirm = drafts.get("profile-confirm") ?? "";
+      if (password === "") return;
+      vscode.postMessage({ type: "changePassword", password, confirmPassword: confirm });
+    };
+    return pageFrame("Profile", [
+      el("div", { class: "opt" }, [
+        el("div", { class: "prow" }, [
+          el("span", { class: "av a1 big", text: initials(name ?? state.user.email) }),
+          el("div", { class: "ch" }, [el("span", { class: "hl tr plain", text: name ?? state.user.email }), el("span", { class: "meta tight" }, [el("span", { class: "tr", text: state.user.email })])]),
+        ]),
+        el("form", { class: "form", onsubmit: (event) => (event.preventDefault(), saveName()) }, [
+          draftInput("profile-name", "Username", { fallback: name ?? "" }),
+          el("p", { class: "hint", text: "Teammates see this name in all your groups." }),
+          el("button", { type: "submit", class: "btn pri full", text: "Save username" }),
+        ]),
+      ]),
+      el("div", { class: "opt" }, [
+        el("h2", { text: "Change password" }),
+        el("form", { class: "form", onsubmit: (event) => (event.preventDefault(), savePassword()) }, [
+          draftInput("profile-password", "New password", { type: "password", autocomplete: "new-password" }),
+          draftInput("profile-confirm", "Repeat new password", { type: "password", autocomplete: "new-password" }),
+          el("button", { type: "submit", class: "btn sec full", text: "Change password" }),
+        ]),
+      ]),
+      el("div", { class: "opt" }, [
+        el("h2", { text: "Groups" }),
+        el("p", { class: "hint", text: `You are in ${plural(state.teams.length, "group")}.` }),
+        el("button", { type: "button", class: "btn sec full", text: "See your groups", onclick: () => setPage("groups") }),
+      ]),
+      el("button", { type: "button", class: "btn ghost full", text: "Log out", onclick: () => vscode.postMessage({ type: "signOut" }) }),
+    ]);
+  }
+
+  function renderPage(state) {
+    const content = page === "groups" ? renderGroupsPage(state) : page === "settings" ? renderSettingsPage(state) : renderProfilePage(state);
+    return el("div", { class: "scroll" }, [content]);
   }
 
   // ---- Frame: header, status strip, tabs, folder connection ----
@@ -736,10 +989,12 @@
           el("div", { class: "team-n tr", text: state.team.name }),
           members > 0 ? el("div", { class: "team-s tr", text: plural(members, "member") }) : null,
         ]),
+        iconButton("Your groups", "team", () => setPage("groups")),
         el("div", { class: "acts" }, [
           iconButton("Open board", "board", () => vscode.postMessage({ type: "openBoard" })),
           Object.assign(iconButton("Open map", "map", () => vscode.postMessage({ type: "openMap" })), {}),
           foldButton,
+          iconButton("Group settings", "gear", () => setPage("settings")),
         ]),
       ]),
       el("div", { class: "inv" }, [
@@ -821,7 +1076,10 @@
 
   function renderAccount(state) {
     return el("footer", { class: "account" }, [
-      el("span", { class: "tr", text: state.user.email }),
+      el("button", { type: "button", class: "who", title: "Your profile", "aria-label": "Your profile", onclick: () => setPage("profile") }, [
+        el("span", { class: "av a1 sm", text: firstLetter(state.user.displayName ?? state.user.email) }),
+        el("span", { class: "tr", text: state.user.displayName ?? state.user.email }),
+      ]),
       el("button", { type: "button", class: "lnk", text: "Log out", onclick: () => vscode.postMessage({ type: "signOut" }) }),
     ]);
   }
@@ -847,11 +1105,14 @@
     const caret = focusedDraft ? focused.selectionStart : 0;
     const scrolled = root.querySelector(".scroll")?.scrollTop ?? 0;
     visibleFolds = [];
+    if (!state.user) page = null;
+    // Settings belong to a group, so without one there is nothing to show.
+    const showPage = Boolean(state.user && page && !(page === "settings" && !state.team));
     root.replaceChildren(
       ...[
         state.error ? el("p", { class: "error", role: "alert", text: state.error }) : null,
         state.notice ? el("p", { class: "notice", role: "status", text: state.notice }) : null,
-        ...(!state.user ? [renderSignedOut()] : state.team ? renderTeam(state) : [renderTeamChoice(state)]),
+        ...(!state.user ? [renderSignedOut()] : showPage ? [renderPage(state)] : state.team ? renderTeam(state) : [renderTeamChoice(state)]),
         state.user ? renderAccount(state) : null,
       ].filter(Boolean),
     );
@@ -870,6 +1131,12 @@
   window.addEventListener("message", (event) => {
     const previous = lastState;
     lastState = event.data;
+    if (lastState.notice === "Password changed.") {
+      drafts.delete("profile-password");
+      drafts.delete("profile-confirm");
+    }
+    // Leaving or deleting the open group closes its settings.
+    if (page === "settings" && !lastState.team) page = null;
     const sameScreen = previous && !previous.user === !lastState.user && !previous.team === !lastState.team;
     const quiet = !lastState.error && !lastState.notice;
     if (isEditing() && sameScreen && quiet) return;

@@ -220,3 +220,30 @@ test("the Team tab shows a map card with live numbers", () => {
   assert.ok(root.querySelector(".hero svg.mini"));
   assert.match(root.querySelector(".stats").textContent, /1working/);
 });
+
+test("tasks can be filtered by person", () => {
+  const { send, root, click } = mount();
+  const pulse = [
+    { name: "Alice", me: true, chats: 1, focus: [], updates: 0, latest: [] },
+    { name: "Bob", me: false, chats: 0, focus: [], updates: 0, latest: [] },
+  ];
+  send({ ...STATE, pulse });
+  const chips = () => [...root.querySelectorAll('[aria-label="Filter tasks by person"] .chip')].map((node: any) => node.textContent);
+  assert.deepEqual(chips(), ["Everyone3", "Alice1", "Bob1"]);
+  const shown = () => [...root.querySelectorAll(".tc .hl")].map((node: any) => node.textContent);
+  assert.deepEqual(shown(), ["Plan it", "Build it", "Ship it"]);
+
+  click("Bob");
+  assert.deepEqual(shown(), ["Build it"]);
+  click("Alice");
+  assert.deepEqual(shown(), ["Ship it"]);
+  click("Everyone");
+  assert.deepEqual(shown(), ["Plan it", "Build it", "Ship it"]);
+});
+
+test("the task filter is hidden when the team is one person, and the Add task button has an icon", () => {
+  const { send, root } = mount();
+  send(STATE);
+  assert.equal(root.querySelector('[aria-label="Filter tasks by person"]'), null);
+  assert.ok(root.querySelector(".addtask .btn.cta svg"));
+});
