@@ -13,8 +13,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@500;600&amp;display=swap">
+<link rel="stylesheet" href="vendor/bootstrap.min.css">
 <link rel="stylesheet" href="styles.css">
-<script>document.documentElement.classList.add("js");try{var t=localStorage.getItem("hacky-theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t;}catch(e){}</script>
+<script>(function(){var d=document.documentElement,t=null;d.classList.add("js");try{t=localStorage.getItem("hacky-theme");}catch(e){}if(t!=="light"&&t!=="dark")t=window.matchMedia&&matchMedia("(prefers-color-scheme: light)").matches?"light":"dark";d.dataset.theme=t;d.dataset.bsTheme=t;})();</script>
 </head>
 <body>
 <a class="skip" href="#how">Skip to content</a>
@@ -27,35 +28,45 @@
       <path d="M466 310l78 45v90l-78 45-78-45v-90z"/><path d="M310 310l78 45v90l-78 45-78-45v-90z"/><path d="M154 310l78 45v90l-78 45-78-45v-90z"/><path d="M388 445l78 45v90l-78 45-78-45v-90z"/>
     </g>
   </svg>
-  <div class="wrap" style="position:relative">
-    <nav class="nav" aria-label="Main">
-      <a class="brand" href="#top"><img src="assets/logo.svg" alt="" width="32" height="32">Hacky</a>
-      <div class="links"><a href="#how">How it works</a><a href="#features">Features</a><a href="#map">Map</a><a href="#tour">Tour</a><a href="#install">Set up</a></div>
-      <span class="sp"></span>
-      <button class="theme" id="theme" type="button" aria-label="Switch between light and dark" title="Switch between light and dark">
-        <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg>
-      </button>
-      <a class="btn pri" href="#install" style="height:42px">Get started</a>
+  <div class="container position-relative">
+    <nav class="navbar navbar-expand-md py-3" aria-label="Main">
+      <a class="brand navbar-brand p-0 me-md-4" href="#top"><img src="assets/logo.svg" alt="" width="32" height="32">Hacky</a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav-menu" aria-controls="nav-menu" aria-expanded="false" aria-label="Open the menu"><span class="navbar-toggler-icon"></span></button>
+      <div class="collapse navbar-collapse" id="nav-menu">
+        <ul class="navbar-nav me-auto mb-2 mb-md-0 gap-md-2">
+          <li class="nav-item"><a class="nav-link" href="#how">How it works</a></li>
+          <li class="nav-item"><a class="nav-link" href="#features">Features</a></li>
+          <li class="nav-item"><a class="nav-link" href="#map">Map</a></li>
+          <li class="nav-item"><a class="nav-link" href="#tour">Tour</a></li>
+          <li class="nav-item"><a class="nav-link" href="#install">Set up</a></li>
+        </ul>
+        <div class="d-flex align-items-center gap-2 pb-2 pb-md-0">
+          <button class="theme" id="theme" type="button" aria-label="Switch between light and dark" title="Switch between light and dark">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M3.4 12.6l1.1-1.1M11.5 4.5l1.1-1.1"/></svg>
+          </button>
+          <a class="btn btn-brand btn-sm-cta" href="#install">Get started</a>
+        </div>
+      </div>
     </nav>
 
-    <div class="hero-in">
-      <div class="hero-l">
+    <div class="row align-items-center g-5 hero-in">
+      <div class="col-lg-6 hero-l">
         <div class="eyebrow">For teams that code with AI agents</div>
         <h1 class="h1">Ask once. Answer once. <em>Every agent knows.</em></h1>
         <p class="lead">Hacky is a shared brain for your team’s Claude Code agents. When an agent is blocked on a human decision, you answer one time and the answer reaches every agent that needs it.</p>
         <div class="cta">
-          <a class="btn pri" href="#install"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5M4.8 7.2L8 10.4l3.2-3.2M3 13h10"/></svg>Set up Hacky</a>
-          <a class="btn sec" href="#how">See how it works</a>
+          <a class="btn btn-brand" href="#install"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5M4.8 7.2L8 10.4l3.2-3.2M3 13h10"/></svg>Set up Hacky</a>
+          <a class="btn btn-ghost" href="#how">See how it works</a>
         </div>
         <p class="note">Built for teams where many people work on the same project. Open source, MIT.</p>
       </div>
-      <div class="hero-r">
-        <div class="chips" aria-hidden="true">
+      <div class="col-lg-6 hero-r">
+        <div class="chips d-none d-sm-flex" aria-hidden="true">
           <div class="chip"><span class="hx needs"><b>3</b></span><b>need you</b></div>
           <div class="chip"><span class="hx work"><b>3</b></span><b>working</b></div>
           <div class="chip"><span class="hx wait"><b>3</b></span><b>waiting</b></div>
         </div>
-        <div class="win" style="width:342px;max-width:100%">
+        <div class="win hero-win">
           <div class="win-bar"><i></i><i></i><i></i><span>Hacky · Sidebar</span></div>
           <div class="ui" role="img" aria-label="The Hacky sidebar showing a question that three agents are waiting on">
             <div class="ui-hd">
@@ -81,7 +92,7 @@
               </div>
               <div class="ui-card">
                 <div class="ui-row"><i class="gl wait"></i><div style="min-width:0"><div class="hl">Assumption: “10% off, no stacking”</div><div class="ui-meta">Ivo · catalog · working on a guess</div></div></div>
-                <div style="display:flex;gap:8px"><span class="ui-btn">Confirm</span><span class="ui-btn sec">Reject</span></div>
+                <div style="display:flex;gap:8px"><span class="ui-btn">Confirm</span><span class="ui-btn ghost">Reject</span></div>
               </div>
               <div class="ui-card"><div class="ui-row"><i class="gl needs"></i><div class="hl tr">Which colour for the header?</div></div></div>
             </div>
@@ -95,14 +106,14 @@
 <main>
   <!-- PROBLEM -->
   <section class="sec alt" id="why">
-    <div class="wrap">
+    <div class="container">
       <div class="head"><div class="eyebrow">The problem</div><h2 class="h2">Each agent only knows its own session.</h2><p class="lead">When many people work on the same project, everyone runs their own agent, and none of them can see what the others know. You can write it all down in <code>CLAUDE.md</code>, <code>plan.md</code>, task splits and a <code>journal.md</code> per person, and the same failure still happens.</p></div>
 
-      <ol class="chain" aria-label="How the failure unfolds">
-        <li><span class="n">1</span><h3>Several agents hit the same open question</h3><p>Something only a human can answer, like “what discount should the checkout apply?”</p></li>
-        <li><span class="n">2</span><h3>Each one asks its own human</h3><p>Every agent stops and waits in its own chat, with no idea the others are stuck on the same thing.</p></li>
-        <li><span class="n">3</span><h3>The humans copy and paste</h3><p>Questions and answers travel between teammates by hand, in chat windows and messages.</p></li>
-        <li><span class="n">4</span><h3>Time is lost, and the answers drift</h3><p>Agents still end up acting on conflicting information, because the answer never reached all of them.</p></li>
+      <ol class="chain row row-cols-1 row-cols-sm-2 row-cols-xl-4 g-3 list-unstyled" aria-label="How the failure unfolds">
+        <li class="col"><div class="ci h-100"><span class="n">1</span><h3>Several agents hit the same open question</h3><p>Something only a human can answer, like “what discount should the checkout apply?”</p></div></li>
+        <li class="col"><div class="ci h-100"><span class="n">2</span><h3>Each one asks its own human</h3><p>Every agent stops and waits in its own chat, with no idea the others are stuck on the same thing.</p></div></li>
+        <li class="col"><div class="ci h-100"><span class="n">3</span><h3>The humans copy and paste</h3><p>Questions and answers travel between teammates by hand, in chat windows and messages.</p></div></li>
+        <li class="col"><div class="ci h-100"><span class="n">4</span><h3>Time is lost, and the answers drift</h3><p>Agents still end up acting on conflicting information, because the answer never reached all of them.</p></div></li>
       </ol>
 
       <div class="callout">
@@ -111,8 +122,8 @@
       </div>
 
       <h3 class="sub">Here is what that looks like in practice</h3>
-      <div class="two">
-        <div class="panel bad">
+      <div class="row g-4">
+        <div class="col-lg-6"><div class="panel bad h-100">
           <h3>Without Hacky</h3>
           <p>Every agent asks you separately, in its own chat.</p>
           <div class="rows">
@@ -123,12 +134,12 @@
             <div class="ask"><span class="ag">Ana · payments</span><span class="ar">→</span><span class="bub"><i class="gl needs sm-gl"></i><span>What discount should the checkout apply?</span></span></div>
           </div>
           <div class="tally">You answer the same question 5 times.</div>
-        </div>
-        <div class="panel good">
+        </div></div>
+        <div class="col-lg-6"><div class="panel good h-100">
           <h3>With Hacky</h3>
           <p>One question, one answer, delivered to everyone who was waiting.</p>
           <div class="flow">
-            <div class="col"><span class="ag">Ana · cart</span><span class="ag">Ivo · catalog</span><span class="ag">Dani · checkout-ui</span><span class="ag">Mira · auth</span><span class="ag">Ana · payments</span></div>
+            <div class="agents"><span class="ag">Ana · cart</span><span class="ag">Ivo · catalog</span><span class="ag">Dani · checkout-ui</span><span class="ag">Mira · auth</span><span class="ag">Ana · payments</span></div>
             <span class="ar">→</span>
             <div class="qcard">
               <div class="q"><i class="gl needs"></i><span>What discount should the checkout apply?</span></div>
@@ -136,10 +147,10 @@
               <div class="a"><i class="gl done"></i><span>10% off the first order, no stacking.</span></div>
             </div>
             <span class="ar">→</span>
-            <div class="col"><span class="know"><i class="gl done sm-gl"></i>knows</span><span class="know"><i class="gl done sm-gl"></i>knows</span><span class="know"><i class="gl done sm-gl"></i>knows</span><span class="know"><i class="gl done sm-gl"></i>knows</span><span class="know"><i class="gl done sm-gl"></i>knows</span></div>
+            <div class="agents"><span class="know"><i class="gl done sm-gl"></i>knows</span><span class="know"><i class="gl done sm-gl"></i>knows</span><span class="know"><i class="gl done sm-gl"></i>knows</span><span class="know"><i class="gl done sm-gl"></i>knows</span><span class="know"><i class="gl done sm-gl"></i>knows</span></div>
           </div>
           <div class="tally">You answer once.</div>
-        </div>
+        </div></div>
       </div>
 
       <h3 class="sub">What Hacky replaces</h3>
@@ -155,44 +166,44 @@
 
   <!-- HOW IT WORKS -->
   <section class="sec" id="how">
-    <div class="wrap">
+    <div class="container">
       <div class="head"><div class="eyebrow">How it works</div><h2 class="h2">The team answers. The agents keep going.</h2></div>
-      <div class="steps">
-        <div class="step"><span class="n">01 · AGENT ASKS</span><h3>A blocked agent raises a question</h3><p>It lands in the team inbox with context, who asked, and how many agents are waiting on it. Duplicates collapse into one card.</p></div>
-        <div class="step"><span class="n">02 · YOU ANSWER</span><h3>One person answers, once</h3><p>The question carries a “For you” badge and a count on the activity bar. Type the answer in the sidebar and send.</p></div>
-        <div class="step"><span class="n">03 · EVERYONE KNOWS</span><h3>The answer reaches every agent</h3><p>While it waits, an agent proceeds on a stated assumption you can confirm or reject. Settled answers become decisions the whole team can see.</p></div>
+      <div class="row row-cols-1 row-cols-md-3 g-4">
+        <div class="col"><div class="step h-100"><span class="n">01 · AGENT ASKS</span><h3>A blocked agent raises a question</h3><p>It lands in the team inbox with context, who asked, and how many agents are waiting on it. Duplicates collapse into one card.</p></div></div>
+        <div class="col"><div class="step h-100"><span class="n">02 · YOU ANSWER</span><h3>One person answers, once</h3><p>The question carries a “For you” badge and a count on the activity bar. Type the answer in the sidebar and send.</p></div></div>
+        <div class="col"><div class="step h-100"><span class="n">03 · EVERYONE KNOWS</span><h3>The answer reaches every agent</h3><p>While it waits, an agent proceeds on a stated assumption you can confirm or reject. Settled answers become decisions the whole team can see.</p></div></div>
       </div>
     </div>
   </section>
 
   <!-- FEATURES -->
   <section class="sec alt" id="features">
-    <div class="wrap">
+    <div class="container">
       <div class="head"><div class="eyebrow">What’s inside</div><h2 class="h2">Built for a glance, never in the way.</h2><p class="lead">Everything uses your VS Code theme, so Hacky looks like it belongs in your editor.</p></div>
-      <div class="feats">
-        <article class="feat"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 9.5l1.7-5.3h7.6l1.7 5.3v3h-11z"/><path d="M2.5 9.5h3.2l.8 1.5h3l.8-1.5h3.2"/></svg></div><h3>Needs you, first</h3><p>Open questions rise to the top with a badge, a status strip and an activity-bar count. Nothing waiting? “No open questions. All clear.”</p></article>
-        <article class="feat"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg></div><h3>Assumptions, not stalls</h3><p>Agents keep working on a stated guess while they wait. Confirm it, or reject it with a reason the agent will read.</p></article>
-        <article class="feat"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5.2a2.5 2.5 0 015 0V7"/></svg></div><h3>Decisions that stick</h3><p>“We use Postgres, not Mongo.” Settled answers become team decisions. Change or withdraw one and every agent is notified.</p></article>
-        <article class="feat"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10M10 3v10"/></svg></div><h3>A shared task board</h3><p>To do, In progress, Done, with an owner and files on every task. Add a task in one line, and filter the board by person.</p></article>
-        <article class="feat"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2"/><path d="M2 13c.4-2.4 1.9-3.6 4-3.6s3.6 1.2 4 3.6"/><circle cx="11.5" cy="6" r="1.7"/><path d="M11 9.6c1.9 0 2.8 1 3.2 2.9"/></svg></div><h3>Team pulse and live feed</h3><p>See each teammate’s chats, what each one is doing right now, and recent progress, without asking in chat.</p></article>
-        <article class="feat"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11v6h-5l-3 2.5v-2.5h-3z"/></svg></div><h3>Agents ask agents</h3><p>Agent-to-agent questions are answered between agents. When one is addressed to you, you can answer it. Answered threads stay read-only.</p></article>
-        <article class="feat"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l5 2v3.6c0 3-2.1 5.2-5 6.8-2.9-1.6-5-3.8-5-6.8V3.8z"/><path d="M6 8l1.6 1.6L10.4 6.8"/></svg></div><h3>Groups and roles</h3><p>Keep several groups, each with leads and members. Only a lead renames or deletes the group, manages people or makes a new invite code. Anyone can leave.</p></article>
-        <article class="feat"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4.5L2.5 8l3 3.5M10.5 4.5l3 3.5-3 3.5M9 3.5l-2 9"/></svg></div><h3>One MCP server</h3><p>Agents talk to Hacky through <code>hacky-mcp-server</code>, which the extension sets up for you. Secrets are filtered out before anything is shared.</p></article>
+      <div class="row row-cols-1 row-cols-sm-2 row-cols-xl-4 g-3">
+        <div class="col"><article class="feat h-100"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 9.5l1.7-5.3h7.6l1.7 5.3v3h-11z"/><path d="M2.5 9.5h3.2l.8 1.5h3l.8-1.5h3.2"/></svg></div><h3>Needs you, first</h3><p>Open questions rise to the top with a badge, a status strip and an activity-bar count. Nothing waiting? “No open questions. All clear.”</p></article></div>
+        <div class="col"><article class="feat h-100"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg></div><h3>Assumptions, not stalls</h3><p>Agents keep working on a stated guess while they wait. Confirm it, or reject it with a reason the agent will read.</p></article></div>
+        <div class="col"><article class="feat h-100"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="7" width="9" height="6.5" rx="1.5"/><path d="M5.5 7V5.2a2.5 2.5 0 015 0V7"/></svg></div><h3>Decisions that stick</h3><p>“We use Postgres, not Mongo.” Settled answers become team decisions. Change or withdraw one and every agent is notified.</p></article></div>
+        <div class="col"><article class="feat h-100"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10M10 3v10"/></svg></div><h3>A shared task board</h3><p>To do, In progress, Done, with an owner and files on every task. Add a task in one line, and filter the board by person.</p></article></div>
+        <div class="col"><article class="feat h-100"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6" cy="5.5" r="2.2"/><path d="M2 13c.4-2.4 1.9-3.6 4-3.6s3.6 1.2 4 3.6"/><circle cx="11.5" cy="6" r="1.7"/><path d="M11 9.6c1.9 0 2.8 1 3.2 2.9"/></svg></div><h3>Team pulse and live feed</h3><p>See each teammate’s chats, what each one is doing right now, and recent progress, without asking in chat.</p></article></div>
+        <div class="col"><article class="feat h-100"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11v6h-5l-3 2.5v-2.5h-3z"/></svg></div><h3>Agents ask agents</h3><p>Agent-to-agent questions are answered between agents. When one is addressed to you, you can answer it. Answered threads stay read-only.</p></article></div>
+        <div class="col"><article class="feat h-100"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l5 2v3.6c0 3-2.1 5.2-5 6.8-2.9-1.6-5-3.8-5-6.8V3.8z"/><path d="M6 8l1.6 1.6L10.4 6.8"/></svg></div><h3>Groups and roles</h3><p>Keep several groups, each with leads and members. Only a lead renames or deletes the group, manages people or makes a new invite code. Anyone can leave.</p></article></div>
+        <div class="col"><article class="feat h-100"><div class="ic"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4.5L2.5 8l3 3.5M10.5 4.5l3 3.5-3 3.5M9 3.5l-2 9"/></svg></div><h3>One MCP server</h3><p>Agents talk to Hacky through <code>hacky-mcp-server</code>, which the extension sets up for you. Secrets are filtered out before anything is shared.</p></article></div>
       </div>
     </div>
   </section>
 
   <!-- MAP -->
   <section class="sec" id="map">
-    <div class="wrap">
-      <div class="mapband">
-        <div class="txt">
+    <div class="container">
+      <div class="row align-items-center g-5">
+        <div class="col-lg-6 txt">
           <div class="eyebrow">Hacky Map</div>
           <h2 class="h2">See your whole team as a live graph.</h2>
           <p class="lead">People, chats and open questions in one animated view. Zoom in, watch the links flow, and scrub the work timeline. Open it from the sidebar or the Board in one click.</p>
-          <div class="cta"><a class="btn sec" href="#tour">Take the tour</a></div>
+          <div class="cta"><a class="btn btn-ghost" href="#tour">Take the tour</a></div>
         </div>
-        <div class="mapbox">
+        <div class="col-lg-6"><div class="mapbox">
           <svg class="mini" viewBox="0 0 300 104" role="img" aria-label="Map preview: 4 people, 8 chats, 1 open question">
             <g class="lk">
               <path d="M46 56L120 30L198 68L262 38M46 56L198 68"/>
@@ -210,14 +221,14 @@
             <circle class="n-q" cx="150" cy="90" r="8"/><text class="n-q-t" x="150" y="93.2">?</text>
           </svg>
           <div class="legend"><span><i style="background:var(--needs)"></i>Needs you</span><span><i style="background:var(--wait)"></i>Waiting</span><span><i style="background:var(--work)"></i>Working</span><span><i style="background:var(--done)"></i>Done</span></div>
-        </div>
+        </div></div>
       </div>
     </div>
   </section>
 
   <!-- TOUR -->
   <section class="sec alt" id="tour">
-    <div class="wrap">
+    <div class="container">
       <div class="head"><div class="eyebrow">The Board</div><h2 class="h2">When you need the full picture, open the Board.</h2></div>
       <div class="tabs" role="group" aria-label="Board tabs">
         <button class="tab on" type="button" data-tab="messages" aria-pressed="true">Messages</button>
@@ -228,7 +239,7 @@
       <p class="cap" id="cap" aria-live="polite">What needs you comes first. Questions, assumptions and agent chats, with a Mine or Everything filter, and the decision log alongside.</p>
       <div class="win">
         <div class="win-bar"><i></i><i></i><i></i><span>Hacky Board</span></div>
-        <div class="ui">
+        <div class="ui ui-scroll">
           <!-- Messages -->
           <div class="pane" id="pane-messages">
             <div class="ui-bar"><h4>Messages</h4><span class="ui-meta">3 questions wait on you · 1 assumption to review</span><span class="sp"></span><span class="ui-pills"><span class="ui-pill on">Mine</span><span class="ui-pill">Everything</span></span></div>
@@ -285,12 +296,12 @@
 
   <!-- SETUP -->
   <section class="sec" id="install">
-    <div class="wrap">
+    <div class="container">
       <div class="head"><div class="eyebrow">Get started</div><h2 class="h2">Three steps, then your agents share a brain.</h2></div>
-      <div class="setup">
-        <div class="sc"><span class="eyebrow">01</span><h3>Install the extension</h3><p>Get the <code>.vsix</code> from <a href="https://github.com/Puhita/Hacky" style="text-decoration:underline">the repo</a> (<code>npm run package</code> in <code>packages/extension</code> builds it), then run “Extensions: Install from VSIX…” in VS Code. Sign up with your email.</p><div class="mock"><small>Hacky for VS Code</small></div></div>
-        <div class="sc"><span class="eyebrow">02</span><h3>Create or join a team</h3><p>Start a team, or join your teammates with their invite code. You can be in several groups.</p><div class="mock">NP-7K4Q<small>invite code</small></div></div>
-        <div class="sc"><span class="eyebrow">03</span><h3>Connect your folder</h3><p>Click “Connect this folder” so your agent can see the team’s answers, then start a new Claude Code chat. “Update setup” re-syncs it later.</p><div class="mock"><i class="gl done"></i><small>Connected · hacky-shop</small></div></div>
+      <div class="row row-cols-1 row-cols-md-3 g-3">
+        <div class="col"><div class="sc h-100"><span class="eyebrow">01</span><h3>Install the extension</h3><p>Get the <code>.vsix</code> from <a href="https://github.com/Puhita/Hacky" style="text-decoration:underline">the repo</a> (<code>npm run package</code> in <code>packages/extension</code> builds it), then run “Extensions: Install from VSIX…” in VS Code. Sign up with your email.</p><div class="mock"><small>Hacky for VS Code</small></div></div></div>
+        <div class="col"><div class="sc h-100"><span class="eyebrow">02</span><h3>Create or join a team</h3><p>Start a team, or join your teammates with their invite code. You can be in several groups.</p><div class="mock">NP-7K4Q<small>invite code</small></div></div></div>
+        <div class="col"><div class="sc h-100"><span class="eyebrow">03</span><h3>Connect your folder</h3><p>Click “Connect this folder” so your agent can see the team’s answers, then start a new Claude Code chat. “Update setup” re-syncs it later.</p><div class="mock"><i class="gl done"></i><small>Connected · hacky-shop</small></div></div></div>
       </div>
       <p class="more">Needs Node and npm on each teammate’s machine, and a Supabase project for the team’s shared data. The full guide is in the <a href="https://github.com/Puhita/Hacky#install">README</a>.</p>
     </div>
@@ -298,20 +309,21 @@
 
   <!-- FINAL CTA -->
   <section class="final sec alt">
-    <div class="wrap"><div class="in">
+    <div class="container"><div class="in">
       <div class="eyebrow">Ready when your team is</div>
       <h2 class="h2">Stop answering the same question five times.</h2>
-      <div class="cta" style="justify-content:center"><a class="btn pri" href="#install">Set up Hacky</a><a class="btn sec" href="https://github.com/Puhita/Hacky">View on GitHub</a></div>
+      <div class="cta" style="justify-content:center"><a class="btn btn-brand" href="#install">Set up Hacky</a><a class="btn btn-ghost" href="https://github.com/Puhita/Hacky">View on GitHub</a></div>
     </div></div>
   </section>
 </main>
 
-<footer class="foot"><div class="wrap">
+<footer class="foot"><div class="container d-flex flex-wrap align-items-center gap-3 gap-md-4">
   <span class="brand"><img src="assets/logo.svg" alt="" width="24" height="24">Hacky</span>
   <span>A shared brain for teams with AI coding agents.</span><span class="sp"></span>
   <a href="#how">How it works</a><a href="#features">Features</a><a href="#install">Set up</a><a href="https://github.com/Puhita/Hacky">GitHub</a>
 </div></footer>
 
+<script src="vendor/bootstrap.bundle.min.js"></script>
 <script src="script.js"></script>
 </body>
 </html>

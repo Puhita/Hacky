@@ -23,13 +23,19 @@
 
   const root = document.documentElement;
   document.getElementById("theme").addEventListener("click", () => {
-    const light = getComputedStyle(root).colorScheme === "light";
-    const next = light ? "dark" : "light";
+    const next = root.dataset.theme === "light" ? "dark" : "light";
     root.dataset.theme = next;
+    root.dataset.bsTheme = next;
     try {
       localStorage.setItem("hacky-theme", next);
     } catch (error) {
       // Private windows can refuse storage. The choice just isn't remembered.
     }
+  });
+
+  // On a phone, close the menu after a link was tapped.
+  const menu = document.getElementById("nav-menu");
+  menu.addEventListener("click", (event) => {
+    if (event.target.closest(".nav-link") && menu.classList.contains("show")) bootstrap.Collapse.getOrCreateInstance(menu).hide();
   });
 })();
