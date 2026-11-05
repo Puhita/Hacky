@@ -288,3 +288,34 @@ body { margin: 0; padding: 0; font: var(--vscode-font-size, 13px)/1.45 var(--vsc
 @media (prefers-reduced-motion: reduce) {
   .hk *, .hk *::before, .hk *::after { animation: none !important; transition: none !important; }
 }
+
+/* Pages: groups, group settings, profile */
+button.team { display: block; text-align: left; border-radius: 5px; }
+button.team:hover { background: var(--hover); }
+.page { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+.page-h { display: flex; align-items: center; gap: 8px; }
+.page-h h1 { font-size: 14px; font-weight: 600; }
+.glist, .mlist { display: flex; flex-direction: column; gap: 8px; }
+.gcard, .mrow, .prow { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.gcard { padding: 10px 12px; border: 1px solid var(--line); background: var(--card); border-radius: 8px; }
+.gcard.cur { border-color: color-mix(in srgb, var(--brand) 55%, transparent); }
+.gcard .ch, .mrow .ch, .prow .ch { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.macts { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex: none; }
+.role { font-size: 11px; color: var(--dim); }
+.role.lead { color: var(--fg); font-weight: 600; }
+.av.big { width: 40px; height: 40px; font-size: 14px; }
+.btn.danger { background: var(--vscode-errorForeground, #f14c4c); color: #fff; }
+.btn.danger:disabled { opacity: 0.4; cursor: not-allowed; }
+.lnk.danger { color: var(--vscode-errorForeground, #f14c4c); }
+.danger-zone { border-color: color-mix(in srgb, var(--vscode-errorForeground, #f14c4c) 45%, transparent); }
+.error.inline { margin: 0; }
+
+/* Groups button, profile button */
+.who { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 3px 12px 3px 3px; border-radius: 20px; color: var(--fg); font-size: 13.5px; font-weight: 600; text-decoration: none; }
+.who:hover { background: var(--hover); }
+.who .av { width: 32px; height: 32px; font-size: 15px; padding-top: 0; }
+
+/* Add task */
+.btn.add { height: 36px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--fg); border: 1px solid color-mix(in srgb, var(--brand) 70%, transparent); background: color-mix(in srgb, var(--brand) 20%, var(--bg)); box-shadow: none; }
+.btn.add:hover { background: color-mix(in srgb, var(--brand) 32%, var(--bg)); border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent); }
+.btn.add svg { width: 16px; height: 16px; stroke-width: 2.2; color: #fff; }

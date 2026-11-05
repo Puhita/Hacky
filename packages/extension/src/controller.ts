@@ -11,7 +11,9 @@ import type {
   PendingAssumption,
   PulseMember,
   Team,
+  TeamMember,
 } from "./api.js";
+import { MIN_PASSWORD_LENGTH } from "./api.js";
 import { connectedTeamId, connectWorkspace, managedBlockIsCurrent } from "./setup.js";
 
 const REFRESH_DEBOUNCE_MS = 300;
@@ -25,9 +27,12 @@ const PULSE_WINDOW_MS = 60 * 60_000;
 export type WorkspaceStatus = "none" | "not_connected" | "connected" | "outdated" | "other_team";
 
 export type SidebarState = {
-  user: { email: string } | null;
+  // displayName is the name teammates see: the one given when joining or creating a group, or changed in the profile.
+  user: { email: string; displayName: string | null } | null;
   teams: Team[];
   team: Team | null;
+  // Everyone in the current group, with their roles.
+  members: TeamMember[];
   workspace: WorkspaceStatus;
   inbox: InboxQuestion[];
   assumptions: PendingAssumption[];
@@ -45,7 +50,7 @@ export type SidebarState = {
 export type Message =
   | { type: "ready" }
   | { type: "signIn"; email: string; password: string }
-  | { type: "signUp"; email: string; password: string }
+  | { type: "signUp"; email: string; password: string; confirmPassword: string }
   | { type: "signOut" }
   | { type: "createTeam"; name: string; displayName: string }
   | { type: "joinTeam"; code: string; displayName: string }
@@ -58,6 +63,14 @@ export type Message =
   | { type: "withdrawDecision"; decisionId: string }
   | { type: "addTask"; title: string }
   | { type: "answerTeammate"; questionId: string; text: string }
+  | { type: "renameTeam"; name: string }
+  | { type: "deleteTeam" }
+  | { type: "leaveTeam" }
+  | { type: "regenerateInvite" }
+  | { type: "removeMember"; userId: string }
+  | { type: "setRole"; userId: string; role: "lead" | "member" }
+  | { type: "updateProfile"; displayName: string }
+  | { type: "changePassword"; password: string; confirmPassword: string }
   | { type: "openMap" }
   | { type: "openBoard" };
 
@@ -80,6 +93,12 @@ export type ControllerOptions = {
   // Opens the Hacky Board (tasks, messages, team, activity) in an editor tab.
   openBoard?: () => void;
 };
+
+// Both boxes must agree, and the password must be long enough for the account service to take it.
+export function checkNewPassword(password: string, confirmPassword: string): void {
+  if (password !== confirmPassword) throw new Error("The two passwords don't match.");
+  if (password.length < MIN_PASSWORD_LENGTH) throw new Error(`The password needs at least ${MIN_PASSWORD_LENGTH} characters.`);
+}
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
@@ -140,6 +159,7 @@ export class SidebarController {
       case "signIn":
         return api.signIn(message.email.trim(), message.password);
       case "signUp":
+        checkNewPassword(message.password, message.confirmPassword);
         if (!(await api.signUp(message.email.trim(), message.password))) {
           this.notice = "Check your email and open the link to confirm your account. It brings you back here to log in.";
         }
@@ -185,6 +205,40 @@ export class SidebarController {
       case "answerTeammate":
         await api.answerPeerQuestion(message.questionId, message.text.trim());
         this.notice = "Answer sent to your teammate's agent.";
+        return;
+      case "renameTeam":
+        await api.renameTeam(this.requireTeam(), message.name.trim());
+        this.notice = "Group renamed.";
+        return;
+      case "deleteTeam":
+        await api.deleteTeam(this.requireTeam());
+        this.setTeam(undefined);
+        this.notice = "Group deleted.";
+        return;
+      case "leaveTeam":
+        await api.leaveTeam(this.requireTeam());
+        this.setTeam(undefined);
+        this.notice = "You left the group.";
+        return;
+      case "regenerateInvite":
+        await api.regenerateInviteCode(this.requireTeam());
+        this.notice = "New invite code. The old one no longer works.";
+        return;
+      case "removeMember":
+        await api.removeMember(this.requireTeam(), message.userId);
+        this.notice = "Removed from the group.";
+        return;
+      case "setRole":
+        await api.setMemberRole(this.requireTeam(), message.userId, message.role);
+        return;
+      case "updateProfile":
+        await api.setDisplayName(message.displayName.trim());
+        this.notice = "Name saved.";
+        return;
+      case "changePassword":
+        checkNewPassword(message.password, message.confirmPassword);
+        await api.changePassword(message.password);
+        this.notice = "Password changed.";
         return;
       case "openMap":
         this.options.openMap?.();
@@ -235,6 +289,11 @@ export class SidebarController {
     this.notice = "Workspace connected. Start a new Claude Code session to use Hacky.";
   }
 
+  private requireTeam(): string {
+    if (!this.teamId) throw new Error("Choose a group first.");
+    return this.teamId;
+  }
+
   private setTeam(teamId: string | undefined): void {
     this.teamId = teamId;
     this.knownPeerQuestions = null;
@@ -270,6 +329,7 @@ export class SidebarController {
       user: null,
       teams: [],
       team: null,
+      members: [],
       workspace: "none",
       inbox: [],
       assumptions: [],
@@ -294,7 +354,7 @@ export class SidebarController {
     try {
       const user = await api.currentUser();
       if (user) {
-        state.user = { email: user.email };
+        state.user = { email: user.email, displayName: await api.displayName() };
         state.teams = await api.listTeams();
         const dir = this.options.workspaceDir();
         const preferred = this.teamId ?? (dir ? (connectedTeamId(dir) ?? undefined) : undefined);
@@ -302,7 +362,7 @@ export class SidebarController {
         if (state.team && state.team.id !== this.teamId) this.setTeam(state.team.id);
         if (state.team) {
           state.workspace = this.workspaceStatus(state.team);
-          [state.inbox, state.assumptions, state.decisions, state.tasks, state.feed, state.pulse, state.agentChat, state.map] =
+          [state.inbox, state.assumptions, state.decisions, state.tasks, state.feed, state.pulse, state.agentChat, state.map, state.members] =
             await Promise.all([
               api.inbox(state.team.id),
               api.assumptions(state.team.id),
@@ -312,6 +372,7 @@ export class SidebarController {
               api.pulse(state.team.id, new Date(Date.now() - PULSE_WINDOW_MS)),
               api.peerThreads(state.team.id),
               api.mapState(state.team.id),
+              api.teamMembers(state.team.id),
             ]);
           this.announceTeammateQuestions(state.agentChat);
         }

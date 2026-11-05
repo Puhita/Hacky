@@ -25,7 +25,10 @@ const MAP_HISTORY_LIMIT = 200;
 // hosted. Each URL must be in the project's allowed redirects, see supabase/config.toml.
 export const confirmationUrl = (uriScheme: string) => `${uriScheme}://hacky.hacky/confirmed`;
 
-export type Team = { id: string; name: string; invite_code: string; role: string };
+export type Team = { id: string; name: string; invite_code: string; role: string; members: number };
+// Someone in the current group. role: lead manages the group, member does not.
+export type TeamMember = { id: string; name: string; role: "lead" | "member"; me: boolean };
+export const MIN_PASSWORD_LENGTH = 6;
 export type InboxQuestion = {
   id: string;
   text: string;
@@ -181,8 +184,72 @@ export class HackyApi {
     if (!user) return [];
     const rows = unwrap(
       await this.supabase.from("members").select("role, teams(id, name, invite_code)").eq("user_id", user.id),
-    ) as unknown as { role: string; teams: Omit<Team, "role"> }[];
-    return rows.map((row) => ({ ...row.teams, role: row.role }));
+    ) as unknown as { role: string; teams: Omit<Team, "role" | "members"> }[];
+    // A person can see every member of their own groups, so one query counts them all.
+    const sizes = new Map<string, number>();
+    const everyone = unwrap(await this.supabase.from("members").select("team_id").in("team_id", rows.map((row) => row.teams.id)));
+    for (const { team_id } of everyone) sizes.set(team_id, (sizes.get(team_id) ?? 0) + 1);
+    return rows.map((row) => ({ ...row.teams, role: row.role, members: sizes.get(row.teams.id) ?? 1 }));
+  }
+
+  // Everyone in the group, leads first.
+  async teamMembers(teamId: string): Promise<TeamMember[]> {
+    const user = await this.currentUser();
+    const rows = unwrap(
+      await this.supabase.from("members").select("user_id, display_name, role, created_at").eq("team_id", teamId).order("created_at", { ascending: true }),
+    );
+    return rows
+      .map((row) => ({ id: row.user_id, name: row.display_name, role: row.role as TeamMember["role"], me: row.user_id === user?.id }))
+      .sort((a, b) => Number(b.role === "lead") - Number(a.role === "lead"));
+  }
+
+  // The group management calls below check the caller's role in the database, so a member who
+  // sends one anyway gets an error back.
+  async renameTeam(teamId: string, name: string): Promise<void> {
+    unwrap(await this.supabase.rpc("rename_team", { target_team: teamId, new_name: name }));
+  }
+
+  async deleteTeam(teamId: string): Promise<void> {
+    unwrap(await this.supabase.rpc("delete_team", { target_team: teamId }));
+  }
+
+  // Replaces the invite code. Returns the new one.
+  async regenerateInviteCode(teamId: string): Promise<string> {
+    return unwrap(await this.supabase.rpc("regenerate_invite_code", { target_team: teamId }));
+  }
+
+  async setMemberRole(teamId: string, userId: string, role: TeamMember["role"]): Promise<void> {
+    unwrap(await this.supabase.rpc("set_member_role", { target_team: teamId, target_user: userId, new_role: role }));
+  }
+
+  async removeMember(teamId: string, userId: string): Promise<void> {
+    unwrap(await this.supabase.rpc("remove_member", { target_team: teamId, target_user: userId }));
+  }
+
+  async leaveTeam(teamId: string): Promise<void> {
+    unwrap(await this.supabase.rpc("leave_team", { target_team: teamId }));
+  }
+
+  // The name teammates see, in every group the person is in.
+  async setDisplayName(name: string): Promise<void> {
+    const { error } = await this.supabase.auth.updateUser({ data: { username: name } });
+    if (error) throw new Error(error.message);
+    unwrap(await this.supabase.rpc("set_display_name", { new_name: name }));
+  }
+
+  // The name the person goes by: the one in their groups, else the one saved on their profile.
+  async displayName(): Promise<string | null> {
+    const { data } = await this.supabase.auth.getSession();
+    const user = data.session?.user;
+    if (!user) return null;
+    const rows = unwrap(await this.supabase.from("members").select("display_name").eq("user_id", user.id).limit(1));
+    const username = user.user_metadata?.username;
+    return rows[0]?.display_name ?? (typeof username === "string" && username.trim() !== "" ? username : null);
+  }
+
+  async changePassword(password: string): Promise<void> {
+    const { error } = await this.supabase.auth.updateUser({ password });
+    if (error) throw new Error(error.message);
   }
 
   async createTeam(name: string, displayName: string): Promise<string> {
@@ -521,6 +588,8 @@ export class HackyApi {
 
     const threads: MapThread[] = [];
     for (const row of questions) {
+      // The person who asked has since left the group, so there is nobody to draw it from.
+      if (!row.asked_by) continue;
       const waiters = row.question_waiters as { user_id: string; session_id: string }[];
       // One decision per question, but the client's types can't tell, so accept either shape.
       const embedded = row.decisions as unknown as { text: string } | { text: string }[] | null;

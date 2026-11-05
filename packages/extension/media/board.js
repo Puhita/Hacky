@@ -16,7 +16,9 @@
   let messageFilter = saved.messageFilter === "all" ? "all" : "mine";
   let activityFilter = typeof saved.activityFilter === "string" ? saved.activityFilter : "";
   const folds = { ...(saved.folds ?? {}) };
-  const persist = () => vscode.setState({ tab, messageFilter, activityFilter, folds });
+  // "" shows everyone's tasks, otherwise only the tasks of the person with that name.
+  let taskFilter = typeof saved.taskFilter === "string" ? saved.taskFilter : "";
+  const persist = () => vscode.setState({ tab, messageFilter, activityFilter, taskFilter, folds });
 
   const drafts = new Map(); // half-typed text, by field id
   const rejecting = new Set(); // assumption ids whose reject box is open
@@ -56,6 +58,7 @@
     chevron: ["M4 6l4 4 4-4"],
     check: ["M3 8.5l3.2 3L13 4.5"],
     close: ["M4 4l8 8M12 4l-8 8"],
+    plus: ["M8 3v10M3 8h10"],
   };
   function icon(name, className = "") {
     const attrs = { viewBox: "0 0 16 16", "aria-hidden": "true" };
@@ -215,16 +218,40 @@
     title.onkeydown = (event) => event.key === "Enter" && add();
     const names = state.pulse.map((member) => member.name);
     const memberIndex = (name) => Math.max(0, names.indexOf(name));
+    if (taskFilter && !names.includes(taskFilter)) taskFilter = "";
+    const countFor = (name) => state.tasks.filter((task) => task.owner === name).length;
+    const chip = (value, label, total) =>
+      el(
+        "button",
+        {
+          type: "button",
+          class: `chip${taskFilter === value ? " on" : ""}`,
+          "aria-pressed": String(taskFilter === value),
+          onclick: () => {
+            taskFilter = value;
+            persist();
+            render(lastState);
+          },
+        },
+        [document.createTextNode(label), el("span", { class: "chip-n", text: String(total) })],
+      );
+    const shown = state.tasks.filter((task) => !taskFilter || task.owner === taskFilter);
     return el("div", { class: "bc-in" }, [
-      el("div", { class: "form" }, [
+      el("div", { class: "addtask" }, [
         el("div", { class: "f1" }, [el("label", { for: "new-task", text: "New task" }), title]),
-        button("Add task", "pri", add),
+        button("Add task", "cta", add, "plus"),
       ]),
+      names.length > 1
+        ? el("div", { class: "chips", role: "group", "aria-label": "Filter tasks by person" }, [
+            chip("", "Everyone", state.tasks.length),
+            ...names.map((name) => chip(name, name, countFor(name))),
+          ])
+        : null,
       el(
         "div",
         { class: "kan" },
         TASK_COLUMNS.map(([status, name, kind]) => {
-          const tasks = state.tasks.filter((task) => task.status === status);
+          const tasks = shown.filter((task) => task.status === status);
           return el("section", { class: "col column" }, [
             el("div", { class: "col-h" }, [glyph(kind), el("span", { text: name }), count(tasks.length)]),
             ...(tasks.length === 0 ? [empty("Nothing here.")] : tasks.map((task) => renderTask(task, kind, memberIndex))),

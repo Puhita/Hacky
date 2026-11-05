@@ -36,6 +36,7 @@ const SIGNED_OUT = {
   user: null,
   teams: [],
   team: null,
+  members: [],
   workspace: "none",
   inbox: [],
   assumptions: [],
@@ -49,7 +50,11 @@ const SIGNED_OUT = {
 };
 const ASSUMPTION = { id: "a1", text: "10% off", created_at: "2026-11-02T10:00:00Z", question: "What discount?", author: "Bob" };
 const DECISION = { id: "d1", text: "17% off", created_at: "2026-11-02T10:00:00Z", question: "What discount?", author: "Alice" };
-const TEAM = { id: "t1", name: "Team One", invite_code: "abc123", role: "lead" };
+const TEAM = { id: "t1", name: "Team One", invite_code: "abc123", role: "lead", members: 2 };
+const MEMBERS = [
+  { id: "u1", name: "Alice", role: "lead", me: true },
+  { id: "u2", name: "Bob", role: "member", me: false },
+];
 const QUESTION = {
   id: "q1",
   text: "What discount?",
@@ -59,7 +64,8 @@ const QUESTION = {
   routed_to_me: true,
   waiting: 2,
 };
-const IN_TEAM = { ...SIGNED_OUT, user: { email: "a@example.com" }, teams: [TEAM], team: TEAM, workspace: "not_connected" };
+const IN_TEAM = { ...SIGNED_OUT, user: { email: "a@example.com", displayName: "Alice" }, teams: [TEAM], team: TEAM, members: MEMBERS, workspace: "not_connected" };
+const AS_MEMBER = { ...IN_TEAM, team: { ...TEAM, role: "member" }, members: [{ ...MEMBERS[0], role: "member" }, { ...MEMBERS[1], role: "lead", me: false }] };
 
 test("asks the extension for state on load", () => {
   assert.deepEqual(mount().sent, [{ type: "ready" }]);
@@ -84,8 +90,35 @@ test("logging in sends the typed values, and empty fields send nothing", () => {
   button("Sign up").click();
   assert.equal(root.querySelector('[name="email"]').value, "a@example.com");
   assert.equal(button("Log in to Hacky"), undefined);
+  // Signing up asks for the password twice. Nothing is sent until both agree.
+  assert.ok(root.querySelector('[name="confirm"]'), "a repeat-password box appears");
   button("Create account").click();
-  assert.deepEqual(sent[2], { type: "signUp", email: "a@example.com", password: "secret" });
+  assert.equal(sent.length, 2, "an empty repeat sends nothing");
+  assert.match(root.querySelector("#auth-error").textContent, /Repeat the password/);
+  const repeat = root.querySelector('[name="confirm"]');
+  repeat.value = "secrex";
+  repeat.dispatchEvent(new window.Event("input"));
+  assert.equal(root.querySelector("#auth-error"), null, "typing clears the message");
+  button("Create account").click();
+  assert.equal(sent.length, 2);
+  assert.match(root.querySelector("#auth-error").textContent, /don't match/);
+  const again = root.querySelector('[name="confirm"]');
+  again.value = "secret";
+  again.dispatchEvent(new window.Event("input"));
+  button("Create account").click();
+  assert.deepEqual(sent[2], { type: "signUp", email: "a@example.com", password: "secret", confirmPassword: "secret" });
+  // Logging in has no repeat box.
+  button("Log in").click();
+  assert.equal(root.querySelector('[name="confirm"]'), null);
+});
+
+test("showing the password on the sign-up form shows the repeat box too", () => {
+  const { send, root, button } = mount();
+  send(SIGNED_OUT);
+  button("Sign up").click();
+  button("Show password").click();
+  assert.equal(root.querySelector('[name="password"]').type, "text");
+  assert.equal(root.querySelector('[name="confirm"]').type, "text");
 });
 
 test("the password can be shown and hidden", () => {
@@ -417,4 +450,176 @@ test("the team view shows live chats, what they are doing, and recent progress",
   assert.match(root.textContent, /3 updates in the last hour/);
   assert.match(root.textContent, /Finished the users API/);
   assert.equal(root.querySelectorAll(".av .pd.live").length, 1, "only Alice has a live dot");
+});
+
+// ---- Groups, group settings and profile ----
+
+const type = (root: any, window: any, selector: string, value: string) => {
+  const input = root.querySelector(selector);
+  input.value = value;
+  input.dispatchEvent(new window.Event("input"));
+};
+const texts = (root: any, selector: string) => [...root.querySelectorAll(selector)].map((node: any) => node.textContent);
+
+test("the team name opens the groups page, with the size and role of each group", () => {
+  const { send, root, button } = mount();
+  send({ ...IN_TEAM, teams: [TEAM, { id: "t2", name: "Other", invite_code: "x", role: "member", members: 1 }] });
+  button("Your groups").click();
+  assert.ok(root.querySelector(".page-h h1").textContent === "Your groups");
+  const cards = texts(root, ".gcard");
+  assert.match(cards[0], /Team One/);
+  assert.match(cards[0], /2 members · Lead · current/);
+  assert.match(cards[1], /1 member · Member/);
+  // Open switches group and goes back to the main view.
+  button("Open").click();
+  assert.equal(root.querySelector(".page"), null);
+});
+
+test("the groups page can also join or create another group", () => {
+  const { send, root, sent, button } = mount();
+  send(IN_TEAM);
+  button("Your groups").click();
+  const forms = [...root.querySelectorAll(".page form")] as any[];
+  assert.equal(forms.length, 2);
+  assert.equal(forms[0].querySelector('[name="displayName"]').value, "Alice", "the name is prefilled");
+  forms[1].querySelector('[name="name"]').value = "Fresh";
+  button("Create team").click();
+  assert.deepEqual(sent.at(-1), { type: "createTeam", name: "Fresh", displayName: "Alice" });
+});
+
+test("a lead can rename, remove, promote, leave and delete from the settings page", () => {
+  const { send, root, window, sent, button } = mount();
+  send(IN_TEAM);
+  button("Group settings").click();
+  assert.equal(root.querySelector(".page-h h1").textContent, "Group settings");
+
+  type(root, window, `#rename-${TEAM.id}`, "Better name");
+  button("Save name").click();
+  assert.deepEqual(sent.at(-1), { type: "renameTeam", name: "Better name" });
+
+  assert.deepEqual(texts(root, ".mrow .hl"), ["Alice (you)", "Bob"]);
+  button("Make lead").click();
+  assert.deepEqual(sent.at(-1), { type: "setRole", userId: "u2", role: "lead" });
+
+  // Removing, a new invite code and leaving need a second click.
+  button("Remove").click();
+  assert.ok(!sent.some((message) => message.type === "removeMember"));
+  button("Sure?").click();
+  assert.deepEqual(sent.at(-1), { type: "removeMember", userId: "u2" });
+
+  button("Make a new code").click();
+  assert.ok(!sent.some((message) => message.type === "regenerateInvite"));
+  button("Replace it? The old code stops working").click();
+  assert.deepEqual(sent.at(-1), { type: "regenerateInvite" });
+
+  button("Leave group").click();
+  assert.ok(!sent.some((message) => message.type === "leaveTeam"));
+  button("Leave for good?").click();
+  assert.deepEqual(sent.at(-1), { type: "leaveTeam" });
+});
+
+test("deleting a group needs its name typed", () => {
+  const { send, root, window, sent, button } = mount();
+  send(IN_TEAM);
+  button("Group settings").click();
+  assert.equal(button("Delete group").disabled, true);
+  type(root, window, `#delete-${TEAM.id}`, "Team On");
+  assert.equal(button("Delete group").disabled, true);
+  type(root, window, `#delete-${TEAM.id}`, "Team One");
+  assert.equal(button("Delete group").disabled, false);
+  button("Delete group").click();
+  assert.deepEqual(sent.at(-1), { type: "deleteTeam" });
+});
+
+test("a member sees the group but none of the lead's controls", () => {
+  const { send, root, button } = mount();
+  send(AS_MEMBER);
+  button("Group settings").click();
+  assert.match(root.querySelector(".page .hint").textContent, /Only a lead/);
+  assert.equal(root.querySelector(`#rename-${TEAM.id}`), null);
+  assert.equal(button("Save name"), undefined);
+  assert.equal(button("Make a new code"), undefined);
+  assert.equal(button("Remove"), undefined);
+  assert.equal(button("Make lead"), undefined);
+  assert.equal(button("Delete group"), undefined);
+  assert.ok(button("Leave group"), "anyone can leave");
+  assert.ok(root.querySelector(".inv-c"), "the invite code is still visible");
+  assert.deepEqual(texts(root, ".role"), ["Member", "Lead"]);
+});
+
+test("the profile page changes the name and the password", () => {
+  const { send, root, window, sent, button } = mount();
+  send(IN_TEAM);
+  button("Your profile").click();
+  assert.equal(root.querySelector(".page-h h1").textContent, "Profile");
+  assert.equal(root.querySelector("#profile-name").value, "Alice");
+  type(root, window, "#profile-name", "Alice B");
+  button("Save username").click();
+  assert.deepEqual(sent.at(-1), { type: "updateProfile", displayName: "Alice B" });
+
+  assert.equal(root.querySelector("#profile-password").type, "password");
+  type(root, window, "#profile-password", "newsecret");
+  type(root, window, "#profile-confirm", "newsecret");
+  button("Change password").click();
+  assert.deepEqual(sent.at(-1), { type: "changePassword", password: "newsecret", confirmPassword: "newsecret" });
+
+  button("Back").click();
+  assert.equal(root.querySelector(".page"), null);
+});
+
+test("the profile page works before the person is in any group", () => {
+  const { send, root, button } = mount();
+  send({ ...IN_TEAM, team: null, teams: [], members: [], user: { email: "a@example.com", displayName: null } });
+  button("Your profile").click();
+  assert.equal(root.querySelector("#profile-name").value, "", "the username can still be set");
+  button("Back").click();
+  assert.ok(root.querySelector(".team-choice"));
+});
+
+test("leaving the open group closes its settings page", () => {
+  const { send, root, button } = mount();
+  send(IN_TEAM);
+  button("Group settings").click();
+  assert.ok(root.querySelector(".page"));
+  send({ ...IN_TEAM, team: null, teams: [], members: [], notice: "You left the group." });
+  assert.equal(root.querySelector(".page"), null);
+  assert.ok(root.querySelector(".team-choice"));
+});
+
+test("the profile button is the first letter in a balloon with the username", () => {
+  const { send, root, button } = mount();
+  send(IN_TEAM);
+  const who = button("Your profile");
+  assert.equal(who.querySelector(".av").textContent, "A");
+  assert.equal(who.textContent, "AAlice");
+  assert.equal(root.querySelector(".account .lnk")?.textContent, "Log out", "only Log out is a link");
+  who.click();
+  assert.equal(root.querySelector(".page-h h1").textContent, "Profile");
+  send({ ...IN_TEAM, user: { email: "zed@example.com", displayName: null } });
+  assert.equal(button("Your profile").textContent, "Zzed@example.com", "falls back to the email");
+});
+
+test("joining and creating a team look the same", () => {
+  const { send, root } = mount();
+  send({ ...IN_TEAM, team: null, teams: [] });
+  const classes = [...root.querySelectorAll(".opt .btn")].map((node: any) => node.className);
+  assert.equal(classes.length, 2);
+  assert.equal(classes[0], classes[1]);
+});
+
+test("the group settings gear is the last button in the header row", () => {
+  const { send, root } = mount();
+  send(IN_TEAM);
+  const labels = [...root.querySelectorAll(".acts .ib")].map((node: any) => node.getAttribute("aria-label"));
+  assert.equal(labels.at(-1), "Group settings");
+});
+
+test("the groups button is just an icon next to the team name", () => {
+  const { send, root, button } = mount();
+  send(IN_TEAM);
+  const groups = button("Your groups");
+  assert.equal(groups.textContent, "", "no text");
+  assert.ok(groups.querySelector("svg"));
+  assert.ok(!groups.classList.contains("btn"), "no border or background of its own");
+  assert.ok(!root.querySelector(".team").matches("button"));
 });
