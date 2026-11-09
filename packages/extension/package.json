@@ -2,11 +2,22 @@
   "name": "hacky",
   "displayName": "Hacky",
   "description": "A shared brain for your team's AI coding agents.",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "license": "MIT",
   "icon": "media/icon.png",
-  "private": true,
-  "publisher": "hacky",
+  "publisher": "ko-solutions",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Puhita/Hacky.git",
+    "directory": "packages/extension"
+  },
+  "homepage": "https://github.com/Puhita/Hacky#readme",
+  "bugs": "https://github.com/Puhita/Hacky/issues",
+  "keywords": ["claude code", "ai agents", "team", "hackathon", "mcp", "task board"],
+  "galleryBanner": {
+    "color": "#16132B",
+    "theme": "dark"
+  },
   "type": "module",
   "engines": {
     "vscode": "^1.100.0"

@@ -23,7 +23,7 @@ const MAP_HISTORY_LIMIT = 200;
 
 // Where the confirmation email's link lands. It opens the user's editor, so nothing has to be
 // hosted. Each URL must be in the project's allowed redirects, see supabase/config.toml.
-export const confirmationUrl = (uriScheme: string) => `${uriScheme}://hacky.hacky/confirmed`;
+export const confirmationUrl = (uriScheme: string) => `${uriScheme}://ko-solutions.hacky/confirmed`;
 
 export type Team = { id: string; name: string; invite_code: string; role: string };
 export type InboxQuestion = {

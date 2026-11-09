@@ -127,7 +127,7 @@ A rejected assumption notifies the agent that declared it and every other agent 
 
 For a teammate joining a team that already exists:
 
-1. **Install the extension.** Get the `.vsix` from whoever built it (`npm run package` in `packages/extension` makes one), then run "Extensions: Install from VSIX..." in VS Code.
+1. **Install the extension.** Run `npx -y hacky-vscode` (use `--editor=cursor` for Cursor), then quit and reopen VS Code. It needs the `code` command on your PATH. To build the extension yourself, `npm run package` in `packages/extension` makes a `.vsix` for "Extensions: Install from VSIX...".
 2. **Open the Hacky sidebar and log in.** Sign up first if you're new; Supabase emails a confirmation link that opens VS Code.
 3. **Create a team, or join one** with the invite code from a teammate.
 4. **Click "Connect this folder".** This writes `.mcp.json` (which starts the server with `npx -y hacky-mcp-server`), the local Claude Code settings, and the managed block in `CLAUDE.md` that tells agents to use the Hacky tools.
