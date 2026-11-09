@@ -332,7 +332,7 @@ test("the confirmation link goes back to the editor, for each editor the project
     userIds.push(data.user!.id);
     const response = await fetch(data.properties!.action_link, { redirect: "manual" });
     const location = response.headers.get("location") ?? "";
-    assert.ok(location.startsWith(`${scheme}://hacky.hacky/confirmed`), `redirected to ${location.split("#")[0]}`);
+    assert.ok(location.startsWith(`${scheme}://ko-solutions.hacky/confirmed`), `redirected to ${location.split("#")[0]}`);
   }
 });
 

@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const vscode = require("vscode");
 
 exports.run = async function run() {
-  const extension = vscode.extensions.getExtension("hacky.hacky");
+  const extension = vscode.extensions.getExtension("ko-solutions.hacky");
   assert.ok(extension, "the extension is installed");
 
   console.log(`VS Code ${vscode.version}, Node ${process.versions.node}, WebSocket: ${typeof WebSocket}`);

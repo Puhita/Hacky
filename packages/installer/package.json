@@ -1,0 +1,27 @@
+{
+  "name": "hacky-vscode",
+  "version": "0.1.0",
+  "description": "Installs the Hacky extension (sidebar, board and map for your team's AI coding agents) into VS Code.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "hacky-vscode": "bin.js"
+  },
+  "files": [
+    "bin.js",
+    "hacky.vsix"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Puhita/Hacky.git",
+    "directory": "packages/installer"
+  },
+  "homepage": "https://github.com/Puhita/Hacky#readme",
+  "keywords": ["hacky", "vscode", "claude code", "mcp", "installer"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepack": "node prepack.mjs"
+  }
+}
