@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "esModuleInterop": true,
+    "rootDir": "..",
+    "outDir": "out",
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "../extension/src/api.ts", "../extension/src/controller.ts", "../extension/src/setup.ts", "../extension/src/attention.ts"]
+}

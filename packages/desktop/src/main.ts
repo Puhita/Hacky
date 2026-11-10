@@ -1,0 +1,240 @@
+// Hacky for Windows. Runs the same controller as the VS Code extension and shows its state in
+// one window: the sidebar on the left, the board and the map as tabs on the right.
+import { readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import { defaultCredentialsFile } from "hacky-mcp-server/credentials";
+import { app, BaseWindow, dialog, ipcMain, Menu, nativeImage, Notification, protocol, Tray, WebContentsView } from "electron";
+import { confirmationUrl, HackyApi } from "../../extension/src/api.js";
+import { attentionCount, statusText } from "../../extension/src/attention.js";
+import { SidebarController, type SidebarState } from "../../extension/src/controller.js";
+import { assetPath, contentType, PAGE_NAMES, pageHtml, parseMessage, type PageName, type Tab } from "./host.js";
+import { runSmoke } from "./smoke.js";
+import { installUpdateNow, startUpdates } from "./updater.js";
+
+declare const __SUPABASE_URL__: string;
+declare const __SUPABASE_PUBLISHABLE_KEY__: string;
+
+const SIDEBAR_WIDTH = 380;
+const TAB_BAR_HEIGHT = 40;
+const smokeDir = process.env.HACKY_SMOKE_DIR;
+
+// The app's own settings. The sign-in itself is in the shared credentials file.
+type Settings = { teamId?: string; digestAt?: number; folder?: string };
+const settingsFile = () => join(app.getPath("userData"), "settings.json");
+let settings: Settings = {};
+function loadSettings(): void {
+  try {
+    settings = JSON.parse(readFileSync(settingsFile(), "utf8"));
+  } catch {
+    settings = {};
+  }
+}
+function saveSettings(change: Partial<Settings>): void {
+  settings = { ...settings, ...change };
+  writeFileSync(settingsFile(), JSON.stringify(settings, null, 2));
+}
+
+protocol.registerSchemesAsPrivileged([{ scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } }]);
+
+if (smokeDir) {
+  // A test run never touches the real app's settings, and can run beside it.
+  app.setPath("userData", join(smokeDir, "user-data"));
+} else if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+
+let win: BaseWindow | undefined;
+let tray: Tray | undefined;
+let quitting = false;
+const views = {} as Record<PageName, WebContentsView>;
+let api: HackyApi | undefined;
+let controller: SidebarController | undefined;
+
+const distFile = (path: string) => join(__dirname, path);
+
+function showWindow(): void {
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function layout(): void {
+  if (!win) return;
+  const { width, height } = win.getContentBounds();
+  const side = Math.min(SIDEBAR_WIDTH, Math.floor(width / 2));
+  views.sidebar.setBounds({ x: 0, y: 0, width: side, height });
+  views.tabs.setBounds({ x: side, y: 0, width: width - side, height: TAB_BAR_HEIGHT });
+  const content = { x: side, y: TAB_BAR_HEIGHT, width: width - side, height: height - TAB_BAR_HEIGHT };
+  views.board.setBounds(content);
+  views.map.setBounds(content);
+}
+
+let activeTab: Tab = "board";
+function showTab(tab: Tab): void {
+  activeTab = tab;
+  views.board.setVisible(tab === "board");
+  views.map.setVisible(tab === "map");
+  views.tabs.webContents.send("hacky:state", { activeTab: tab });
+}
+
+function showAttention(state: SidebarState): void {
+  if (!tray) return;
+  const count = state.user && state.team ? attentionCount(state) : 0;
+  tray.setToolTip(state.user && state.team ? statusText(count) : "Hacky");
+}
+
+function createWindow(): void {
+  win = new BaseWindow({ width: 1280, height: 820, minWidth: 760, minHeight: 480, title: "Hacky", icon: distFile("icon.png"), backgroundColor: "#1e1e1e" });
+  for (const name of PAGE_NAMES) {
+    const view = new WebContentsView({
+      webPreferences: { preload: distFile("preload.cjs"), sandbox: true, contextIsolation: true, nodeIntegration: false },
+    });
+    view.setBackgroundColor("#1e1e1e");
+    // A screen never navigates away or opens windows of its own.
+    view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    view.webContents.on("will-navigate", (event) => event.preventDefault());
+    win.contentView.addChildView(view);
+    views[name] = view;
+    void view.webContents.loadURL(`app://ui/${name}.html`);
+  }
+  layout();
+  showTab("board");
+  win.on("resize", layout);
+  win.on("close", (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    win?.hide();
+  });
+}
+
+// The version waiting to be installed, once an update has downloaded.
+let updateReady: string | undefined;
+
+function trayMenu(): Menu {
+  return Menu.buildFromTemplate([
+    { label: "Open Hacky", click: showWindow },
+    ...(updateReady ? [{ label: `Restart to update to ${updateReady}`, click: installUpdateNow }] : []),
+    { type: "separator" },
+    { label: `Hacky ${app.getVersion()}`, enabled: false },
+    { label: "Quit", click: () => app.quit() },
+  ]);
+}
+
+function createTray(): void {
+  tray = new Tray(nativeImage.createFromPath(distFile("icon.png")).resize({ width: 16, height: 16 }));
+  tray.setToolTip("Hacky");
+  tray.on("click", showWindow);
+  tray.setContextMenu(trayMenu());
+}
+
+function onUpdateReady(version: string): void {
+  updateReady = version;
+  tray?.setContextMenu(trayMenu());
+  new Notification({ title: "Hacky", body: `Hacky ${version} is ready. It installs when you quit, or restart now from the tray icon.` }).show();
+}
+
+function createController(): SidebarController {
+  api = new HackyApi(__SUPABASE_URL__, __SUPABASE_PUBLISHABLE_KEY__, defaultCredentialsFile(), confirmationUrl("hacky"));
+  return new SidebarController({
+    api,
+    supabaseUrl: __SUPABASE_URL__,
+    publishableKey: __SUPABASE_PUBLISHABLE_KEY__,
+    workspaceDir: () => settings.folder ?? null,
+    loadTeamId: () => settings.teamId,
+    saveTeamId: (teamId) => saveSettings({ teamId }),
+    post: (state) => {
+      // The screens also show which folder is chosen.
+      const data = { ...state, folder: settings.folder ? basename(settings.folder) : null };
+      for (const name of ["sidebar", "board", "map"] as const) views[name].webContents.send("hacky:state", data);
+      showAttention(state);
+    },
+    digestMinutes: () => 30,
+    loadDigestAt: () => settings.digestAt,
+    saveDigestAt: (at) => saveSettings({ digestAt: at }),
+    notify: (message) => {
+      const notification = new Notification({ title: "Hacky", body: message });
+      notification.on("click", showWindow);
+      notification.show();
+    },
+    openMap: () => {
+      showTab("map");
+      showWindow();
+    },
+    openBoard: () => {
+      showTab("board");
+      showWindow();
+    },
+  });
+}
+
+async function chooseFolder(): Promise<void> {
+  const result = await dialog.showOpenDialog({ title: "Choose the project folder to connect", properties: ["openDirectory"] });
+  if (result.canceled || !result.filePaths[0]) return;
+  saveSettings({ folder: result.filePaths[0] });
+  await controller?.refresh();
+}
+
+function handleMessage(raw: unknown): void {
+  const parsed = parseMessage(raw);
+  if (!parsed) return;
+  if (parsed.kind === "showTab") showTab(parsed.tab);
+  else if (parsed.kind === "chooseFolder") void chooseFolder();
+  else {
+    // A screen that has just loaded missed which tab is showing.
+    if (parsed.message.type === "ready") views.tabs.webContents.send("hacky:state", { activeTab });
+    void controller?.handle(parsed.message);
+  }
+}
+
+// The email confirmation link (hacky://...) brings the person back to the app. Its fragment holds
+// login tokens, which are deliberately ignored: they log in as usual.
+function handleConfirmationLink(): void {
+  showWindow();
+  new Notification({ title: "Hacky", body: "Your email is confirmed. Log in to Hacky." }).show();
+}
+const linkIn = (argv: string[]) => argv.some((arg) => arg.startsWith("hacky://"));
+
+app.on("second-instance", (_event, argv) => {
+  if (linkIn(argv)) handleConfirmationLink();
+  else showWindow();
+});
+app.on("before-quit", () => {
+  quitting = true;
+});
+app.on("will-quit", () => {
+  controller?.dispose();
+  void api?.dispose();
+});
+app.on("window-all-closed", () => app.quit());
+
+void app.whenReady().then(() => {
+  loadSettings();
+  if (app.isPackaged) app.setAsDefaultProtocolClient("hacky");
+
+  protocol.handle("app", (request) => {
+    const { pathname } = new URL(request.url);
+    const page = PAGE_NAMES.find((name) => pathname === `/${name}.html`);
+    if (page) return new Response(pageHtml(page), { headers: { "content-type": "text/html; charset=utf-8" } });
+    const file = assetPath(pathname);
+    if (!file) return new Response("Not found", { status: 404 });
+    try {
+      return new Response(readFileSync(distFile(file)), { headers: { "content-type": contentType(file) } });
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+  });
+
+  ipcMain.on("hacky:message", (event, raw) => {
+    if (!event.senderFrame?.url.startsWith("app://ui/")) return;
+    handleMessage(raw);
+  });
+
+  createWindow();
+  createTray();
+  controller = createController();
+  if (linkIn(process.argv)) handleConfirmationLink();
+  // Only an installed app updates itself; a test run never does.
+  if (app.isPackaged && !smokeDir) startUpdates(onUpdateReady);
+  if (smokeDir) void runSmoke({ dir: smokeDir, views, showTab, quit: () => app.quit() });
+});

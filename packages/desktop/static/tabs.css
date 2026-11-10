@@ -1,0 +1,17 @@
+html, body { margin: 0; height: 100%; }
+body {
+  font: var(--vscode-font-size) var(--vscode-font-family);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  -webkit-user-select: none;
+  user-select: none;
+}
+#bar { display: flex; align-items: stretch; height: 100%; padding: 0 8px; gap: 4px; }
+button {
+  font: inherit; color: var(--vscode-descriptionForeground); background: none; border: 0;
+  border-bottom: 2px solid transparent; padding: 0 14px; cursor: pointer;
+}
+button:hover { color: var(--vscode-foreground); }
+button.on { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); }
+button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -3px; }

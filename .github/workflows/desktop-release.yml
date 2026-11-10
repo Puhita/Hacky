@@ -1,0 +1,39 @@
+# Builds the Windows app when a version tag (v0.1.1, ...) is pushed and uploads the installer to a
+# DRAFT GitHub release. Installed apps only update once a person publishes that draft.
+name: Desktop release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      # Only the public project URL and publishable key go into the app. RLS protects the data.
+      SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+      SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+      # electron-builder downloads its own copy for packaging.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Check the tag matches the app version
+        shell: bash
+        run: |
+          version=$(node -p "require('./packages/desktop/package.json').version")
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match packages/desktop version $version"
+            exit 1
+          fi
+      - run: npm test -w hacky-desktop
+      - run: npm run release -w hacky-desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

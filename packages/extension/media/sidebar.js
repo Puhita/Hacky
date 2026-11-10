@@ -1055,11 +1055,23 @@
     const outdated = state.workspace === "outdated";
     const canConnect = state.workspace === "not_connected" || state.workspace === "other_team" || outdated;
     const connect = () => vscode.postMessage({ type: "connectWorkspace" });
+    // The desktop app has no open folder of its own, so the person picks one.
+    const desktop = vscode.host === "desktop";
+    const choose = () => vscode.postMessage({ type: "chooseFolder" });
+    const chooseButton = (label, cls) => Object.assign(el("button", { type: "button", class: cls }, [icon("folder"), document.createTextNode(label)]), { onclick: choose });
+    const named = (text) => (desktop && state.folder ? `${state.folder}: ${text}` : text);
     if (state.workspace === "connected") {
-      return el("div", { class: "foot" }, [glyph("done"), el("span", { class: "ft tr", text: WORKSPACE_TEXT.connected })]);
+      return el("div", { class: "foot" }, [
+        glyph("done"),
+        el("span", { class: "ft tr", text: named(WORKSPACE_TEXT.connected) }),
+        desktop ? chooseButton("Change", "btn") : null,
+      ]);
     }
     return el("div", { class: "foot off" }, [
-      el("div", { class: "row2" }, [glyph(canConnect ? "wait" : "idle"), el("p", { text: WORKSPACE_TEXT[state.workspace] })]),
+      el("div", { class: "row2" }, [
+        glyph(canConnect ? "wait" : "idle"),
+        el("p", { text: desktop && state.workspace === "none" ? "Choose your project folder to connect it to this team." : named(WORKSPACE_TEXT[state.workspace]) }),
+      ]),
       canConnect
         ? el("p", {
             class: "hint",
@@ -1071,6 +1083,7 @@
       canConnect
         ? Object.assign(el("button", { type: "button", class: "btn pri full" }, [icon("folder"), document.createTextNode(outdated ? "Update setup" : "Connect this folder")]), { onclick: connect })
         : null,
+      desktop ? chooseButton(state.workspace === "none" ? "Choose folder" : "Choose another folder", state.workspace === "none" ? "btn pri full" : "btn full") : null,
     ]);
   }
 

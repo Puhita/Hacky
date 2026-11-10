@@ -3,6 +3,7 @@ CLAUDE.md
 node_modules/
 dist/
 out/
+release/
 .vscode-test/
 *.vsix
 *.tgz

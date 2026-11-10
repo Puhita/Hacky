@@ -133,6 +133,12 @@ For a teammate joining a team that already exists:
 4. **Click "Connect this folder".** This writes `.mcp.json` (which starts the server with `npx -y hacky-mcp-server`), the local Claude Code settings, and the managed block in `CLAUDE.md` that tells agents to use the Hacky tools.
 5. **Start a new Claude Code chat** in the folder. Chats that were already running keep their old server.
 
+### Without VS Code: the Windows app
+
+For people who work in another tool (Unity, Blender, Cursor...), the app shows the same sidebar, board and map in its own window and sits in the tray. Download `Hacky-Setup-<version>.exe` from [Releases](https://github.com/Puhita/Hacky/releases) and run it. It isn't code-signed yet, so Windows SmartScreen asks first: choose "More info", then "Run anyway". Log in, pick your team, then click "Choose folder" to connect your project folder. The app updates itself from new releases. It shares its login with the extension, so you can use both.
+
+To release a new version: bump `version` in `packages/desktop/package.json`, commit, then push a matching tag (`git tag v0.1.1 && git push origin v0.1.1`). The "Desktop release" workflow builds the installer and uploads it to a draft release. Check the draft, then publish it; installed apps pick it up within six hours or on their next start. The workflow needs the repository variables `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (Settings → Secrets and variables → Actions → Variables). Never add the secret key there.
+
 Whoever owns the Supabase project applies the migrations with `npx supabase db push` (needs the `.env` with the project ref and database password). The extension and server only need Node and npm on each teammate's machine.
 
 ## Success metric

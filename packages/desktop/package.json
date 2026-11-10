@@ -1,0 +1,62 @@
+{
+  "name": "hacky-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hacky for Windows: the sidebar, board and map in their own app, with a tray icon and notifications.",
+  "license": "MIT",
+  "author": "ko-solutions",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "tsc --noEmit && node --env-file-if-exists=../../.env esbuild.mjs",
+    "start": "npm run build && electron .",
+    "test": "npm run build && tsc --outDir out --noEmit false && node --test \"out/desktop/src/**/*.test.js\"",
+    "smoke": "npm run build && node smoke.mjs",
+    "dist": "npm run build && electron-builder --win --publish never",
+    "release": "npm run build && electron-builder --win --publish always"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "electron": "45.2.3",
+    "electron-builder": "^26.18.0",
+    "electron-updater": "^6.8.11",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.0.0"
+  },
+  "build": {
+    "appId": "com.ko-solutions.hacky",
+    "productName": "Hacky",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "package.json",
+      "!dist/**/*.map"
+    ],
+    "protocols": [
+      {
+        "name": "Hacky",
+        "schemes": [
+          "hacky"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "dist/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Hacky-Setup-${version}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Puhita",
+        "repo": "Hacky",
+        "releaseType": "draft"
+      }
+    ]
+  }
+}
