@@ -33,6 +33,8 @@ jobs:
             echo "Tag $GITHUB_REF_NAME does not match packages/desktop version $version"
             exit 1
           fi
+      # The app imports the server's credentials and redact modules from its built output.
+      - run: npm run build -w hacky-mcp-server
       - run: npm test -w hacky-desktop
       - run: npm run release -w hacky-desktop
         env:
