@@ -19,8 +19,8 @@ jobs:
       # electron-builder downloads its own copy for packaging.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -36,6 +36,12 @@ jobs:
       # The app imports the server's credentials and redact modules from its built output.
       - run: npm run build -w hacky-mcp-server
       - run: npm test -w hacky-desktop
+      # Without an existing draft, electron-builder's parallel uploads each create their own.
+      - name: Create the draft release
+        shell: bash
+        run: gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "${GITHUB_REF_NAME#v}" --notes ""
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: npm run release -w hacky-desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
