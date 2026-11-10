@@ -33,6 +33,21 @@
     }
   });
 
+  // Point the download button straight at the newest installer. Until a release is published, or if
+  // GitHub can't be reached, it keeps linking to the releases page.
+  const download = document.getElementById("dl-btn");
+  const note = document.getElementById("dl-note");
+  fetch("https://api.github.com/repos/Puhita/Hacky/releases/latest")
+    .then((response) => (response.ok ? response.json() : null))
+    .then((release) => {
+      const installer = release && release.assets.find((asset) => /\.exe$/i.test(asset.name));
+      if (!installer) return;
+      download.href = installer.browser_download_url;
+      const size = Math.round(installer.size / 1048576);
+      note.textContent = `Version ${release.tag_name.replace(/^v/, "")} · ${size} MB · Windows 10 and 11, 64-bit. Free and open source.`;
+    })
+    .catch(() => {});
+
   // On a phone, close the menu after a link was tapped.
   const menu = document.getElementById("nav-menu");
   menu.addEventListener("click", (event) => {

@@ -340,3 +340,13 @@ h1, h2, h3, h4, h5 { margin: 0; }
 
 /* Bootstrap makes pseudo-elements border-box, which shrinks and shifts the tick inside the circle */
 .gl.done::before { box-sizing: content-box; left: 5px; top: 2.2px; width: 4px; height: 8px; }
+
+/* Windows app download */
+.dl-steps { display: flex; flex-direction: column; gap: 12px; margin: 0; }
+.dl-steps li { display: flex; gap: 16px; align-items: flex-start; border: 1px solid var(--line); background: var(--card); border-radius: 14px; padding: 18px 20px; }
+.dl-steps .n { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font: 700 13px var(--mono); color: var(--ink); background: var(--brand); }
+.dl-steps h3 { font: 700 17px var(--disp); margin-bottom: 4px; }
+.dl-steps p { color: var(--dim); font-size: 15px; margin: 0; }
+.dl-steps code { font: 500 13px var(--mono); background: color-mix(in srgb, var(--fg) 10%, transparent); padding: 1px 6px; border-radius: 5px; }
+.dl-txt { display: flex; flex-direction: column; gap: 18px; }
+.dl-txt .cta { margin-top: 6px; }
