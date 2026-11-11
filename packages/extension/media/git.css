@@ -1,0 +1,58 @@
+/* Hacky Git. Everything derives from --vscode-* variables, so any light, dark or
+   high-contrast theme works. */
+html, body { min-height: 100%; }
+body { margin: 0; padding: 0; font: var(--vscode-font-size, 13px)/1.45 var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
+
+#root.hk {
+  --bg: var(--vscode-editor-background);
+  --fg: var(--vscode-foreground);
+  --dim: var(--vscode-descriptionForeground);
+  --line: var(--vscode-widget-border, var(--vscode-panel-border, rgba(128, 128, 128, 0.3)));
+  --card: color-mix(in srgb, var(--fg) 4%, var(--bg));
+  --brand: var(--vscode-textLink-foreground);
+  --hover: var(--vscode-list-hoverBackground);
+  --err: var(--vscode-errorForeground, #f14c4c);
+  min-height: 100vh;
+  color: var(--fg);
+  background: var(--bg);
+}
+.hk *, .hk *::before, .hk *::after { box-sizing: border-box; }
+.hk .page { max-width: 1100px; margin: 0 auto; padding: 16px 16px 40px; display: flex; flex-direction: column; gap: 12px; }
+.hk h1 { font-size: 18px; margin: 0; }
+.hk h2 { font-size: 13px; margin: 0 0 8px; }
+.hk p { margin: 0; }
+.hk .bar { display: flex; align-items: center; gap: 12px; }
+.hk .grow { flex: 1; min-width: 0; }
+.hk .hint { color: var(--dim); font-size: 12px; }
+.hk .nowrap { white-space: nowrap; }
+.hk .tr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hk .msg { padding: 8px 10px; border: 1px solid var(--err); border-radius: 6px; }
+.hk .btn { padding: 4px 12px; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 4px; font: inherit; cursor: pointer; }
+.hk .btn:hover { background: var(--hover); }
+
+.hk .layout { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
+@media (max-width: 800px) { .hk .layout { grid-template-columns: minmax(0, 1fr); } }
+.hk .history { border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 4px 0; }
+.hk .scroll { display: flex; overflow-x: auto; }
+.hk .graph { flex: none; display: block; }
+.hk .rows { flex: 1; min-width: 480px; }
+.hk .crow { height: 30px; display: flex; align-items: center; gap: 8px; padding-right: 12px; border-bottom: 0; }
+.hk .crow:hover { background: var(--hover); }
+.hk .subject { flex: 1; }
+.hk .sha { color: var(--dim); font: 11.5px var(--vscode-editor-font-family, monospace); }
+
+.hk .chip { flex: none; font-size: 11px; line-height: 1; padding: 3px 7px; border-radius: 10px; border: 1px solid var(--line); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hk .chip.head { border-color: var(--brand); color: var(--brand); font-weight: 600; }
+.hk .chip.local { border-color: color-mix(in srgb, #89d185 70%, var(--fg)); }
+.hk .chip.remote { border-color: color-mix(in srgb, #3794ff 70%, var(--fg)); }
+.hk .chip.tag { border-color: color-mix(in srgb, #d18616 70%, var(--fg)); }
+
+.hk .who { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; max-width: 170px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--dim); }
+.hk .who.me { color: var(--fg); font-weight: 600; }
+.hk .av { width: 16px; height: 16px; flex: none; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; border-radius: 50%; border: 1px solid var(--line); }
+.hk .av.team { border-color: var(--brand); color: var(--brand); }
+
+.hk .branches { border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 12px; }
+.hk .branches ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.hk .branches li { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.hk .branches li.cur .chip { border-color: var(--brand); }

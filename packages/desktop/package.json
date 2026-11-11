@@ -16,6 +16,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "electron": "45.2.3",
     "electron-builder": "^26.18.0",
     "electron-updater": "^6.8.11",
@@ -57,6 +59,12 @@
         "repo": "Hacky",
         "releaseType": "draft"
       }
+    ],
+    "asarUnpack": [
+      "**/node_modules/@lydell/**"
     ]
+  },
+  "dependencies": {
+    "@lydell/node-pty": "1.1.0"
   }
 }

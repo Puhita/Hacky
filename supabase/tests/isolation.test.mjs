@@ -178,6 +178,58 @@ test("a row can't reference another team's member", async () => {
   assert.ok(error);
 });
 
+test("the project page is team-only: other teams can't read it, write it, or forge its author", async () => {
+  const { error: overviewError } = await alice.client
+    .from("team_overview")
+    .insert({ team_id: teamA.id, idea: "Alice's idea", architecture: "Layers", updated_by: alice.userId });
+  assert.ifError(overviewError);
+  const { data: item, error: itemError } = await alice.client
+    .from("project_items")
+    .insert({ team_id: teamA.id, kind: "bug", title: "A bug", severity: "high", author_id: alice.userId })
+    .select()
+    .single();
+  assert.ifError(itemError);
+
+  // Another team's member sees nothing and changes nothing.
+  assert.equal((await bob.client.from("team_overview").select()).data.length, 0);
+  assert.equal((await bob.client.from("project_items").select()).data.length, 0);
+  await bob.client.from("team_overview").update({ idea: "hijacked", updated_by: bob.userId }).eq("team_id", teamA.id);
+  await bob.client.from("project_items").update({ title: "hijacked" }).eq("id", item.id);
+  assert.equal((await admin.from("team_overview").select("idea").eq("team_id", teamA.id).single()).data.idea, "Alice's idea");
+  assert.equal((await admin.from("project_items").select("title").eq("id", item.id).single()).data.title, "A bug");
+  assert.ok((await bob.client.from("team_overview").insert({ team_id: teamA.id, idea: "x", updated_by: bob.userId })).error);
+  assert.ok((await bob.client.from("project_items").insert({ team_id: teamA.id, kind: "idea", title: "x", author_id: bob.userId })).error);
+  assert.ok((await bob.client.rpc("item_to_task", { target_item: item.id })).error, "no turning another team's item into a task");
+
+  // Inside the team, the author can't be forged and the checks hold.
+  assert.ok((await alice.client.from("project_items").insert({ team_id: teamA.id, kind: "bug", title: "forged", author_id: bob.userId })).error);
+  assert.ok((await alice.client.from("project_items").insert({ team_id: teamA.id, kind: "idea", title: "x", severity: "low", author_id: alice.userId })).error, "only bugs have a severity");
+  assert.ok((await alice.client.from("project_items").insert({ team_id: teamA.id, kind: "bug", title: " ", author_id: alice.userId })).error, "a title is required");
+
+  // One click turns an item into a task, once.
+  const { data: taskId, error: convertError } = await alice.client.rpc("item_to_task", { target_item: item.id });
+  assert.ifError(convertError);
+  const { data: task } = await admin.from("tasks").select("title, team_id").eq("id", taskId).single();
+  assert.equal(task.title, "Bug: A bug");
+  assert.equal(task.team_id, teamA.id);
+  assert.equal((await admin.from("project_items").select("task_id").eq("id", item.id).single()).data.task_id, taskId);
+  assert.ok((await alice.client.rpc("item_to_task", { target_item: item.id })).error, "an item gets one task");
+});
+
+test("file touches: only your team reads them, and they can only be written as yourself through the function", async () => {
+  assert.ifError((await alice.client.rpc("record_file_touch", { target_team: teamA.id, touched_path: "src/app.ts" })).error);
+  assert.ifError((await alice.client.rpc("record_file_touch", { target_team: teamA.id, touched_path: "src/app.ts" })).error);
+  const { data } = await admin.from("file_touches").select("user_id, path, touches").eq("team_id", teamA.id);
+  assert.deepEqual(data, [{ user_id: alice.userId, path: "src/app.ts", touches: 2 }], "a second touch counts up");
+
+  assert.equal((await alice.client.from("file_touches").select()).data.length, 1);
+  assert.equal((await bob.client.from("file_touches").select()).data.length, 0, "another team sees nothing");
+  assert.ok((await bob.client.rpc("record_file_touch", { target_team: teamA.id, touched_path: "x.ts" })).error, "no writing into another team");
+  assert.ok((await alice.client.from("file_touches").insert({ team_id: teamA.id, user_id: alice.userId, path: "direct.ts" })).error, "no direct inserts");
+  assert.ok((await alice.client.from("file_touches").update({ touches: 99 }).eq("team_id", teamA.id)).error || true);
+  assert.equal((await admin.from("file_touches").select("touches").eq("team_id", teamA.id)).data[0].touches, 2, "no direct updates");
+});
+
 test("joining requires a valid invite code", async () => {
   const { error } = await bob.client.rpc("join_team", { code: "not-a-real-code", member_name: "Bob" });
   assert.ok(error);

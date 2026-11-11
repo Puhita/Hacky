@@ -38,6 +38,14 @@
       {
         "command": "hacky.openBoard",
         "title": "Hacky: Open Board"
+      },
+      {
+        "command": "hacky.openSkills",
+        "title": "Hacky: Open Skills"
+      },
+      {
+        "command": "hacky.openGit",
+        "title": "Hacky: Open Git"
       }
     ],
     "configuration": {

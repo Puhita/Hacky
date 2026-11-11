@@ -334,6 +334,59 @@ test("a task can be added with an area, which shows on the board and the map; an
   assert.ok(!alice.last().tasks.some((task) => task.title === "Odd one"));
 });
 
+test("the project page: the overview is saved without secrets, ideas and bugs are filed, closed and turned into tasks", async () => {
+  const secret = "sb_secret_abcdefghijklmnop123456";
+  assert.equal(alice.last().project.overview.updatedAt, null, "no overview yet");
+  await alice.controller.handle({ type: "saveOverview", idea: `Shared brain. API_KEY=${secret}`, architecture: "MCP server plus Supabase" });
+  assert.equal(alice.last().error, null);
+  const overview = alice.last().project.overview;
+  assert.ok(!overview.idea.includes(secret));
+  assert.equal(overview.architecture, "MCP server plus Supabase");
+  assert.equal(overview.updatedBy, "Alice");
+  await alice.controller.handle({ type: "saveOverview", idea: "Second version", architecture: "Same" });
+  assert.equal(alice.last().project.overview.idea, "Second version", "saving again replaces it");
+
+  await alice.controller.handle({ type: "addProjectItem", kind: "bug", title: `Crash ${secret}`, details: "On save", severity: "high" });
+  await alice.controller.handle({ type: "addProjectItem", kind: "idea", title: "Dark mode" });
+  assert.equal(alice.last().error, null);
+  const items = alice.last().project.items;
+  const bug = items.find((item) => item.kind === "bug")!;
+  const idea = items.find((item) => item.kind === "idea")!;
+  assert.ok(!bug.title.includes(secret));
+  assert.equal(bug.severity, "high");
+  assert.equal(bug.author, "Alice");
+  assert.equal(idea.severity, null);
+
+  await alice.controller.handle({ type: "addProjectItem", kind: "idea", title: "Odd", severity: "high" });
+  assert.ok(alice.last().error, "only bugs have a severity");
+  await alice.controller.handle({ type: "addProjectItem", kind: "bug", title: "   " });
+  assert.ok(alice.last().error, "a title is required");
+
+  await alice.controller.handle({ type: "projectItemToTask", itemId: bug.id });
+  assert.equal(alice.last().error, null);
+  assert.notEqual(alice.last().project.items.find((item) => item.id === bug.id)!.taskId, null);
+  assert.ok(alice.last().tasks.some((task) => task.title.startsWith("Bug: Crash")));
+  await alice.controller.handle({ type: "projectItemToTask", itemId: bug.id });
+  assert.ok(alice.last().error, "an item gets one task");
+
+  await alice.controller.handle({ type: "setProjectItemStatus", itemId: idea.id, status: "dropped" });
+  assert.equal(alice.last().project.items.find((item) => item.id === idea.id)!.status, "dropped");
+});
+
+test("the Files tab data: touches from the last week, with who touched them", async () => {
+  const teamId = alice.last().team!.id;
+  const { data: member } = await admin.from("members").select("user_id").eq("team_id", teamId).eq("role", "member").single();
+  const old = new Date(Date.now() - 10 * 86_400_000).toISOString();
+  const { error } = await admin.from("file_touches").insert([
+    { team_id: teamId, user_id: member!.user_id, path: "src/app.ts", touches: 3, last_at: new Date().toISOString() },
+    { team_id: teamId, user_id: member!.user_id, path: "src/old.ts", touches: 1, last_at: old },
+  ]);
+  assert.ifError(error);
+  await alice.controller.refresh();
+  const touches = alice.last().fileTouches;
+  assert.deepEqual(touches.map((touch) => [touch.path, touch.person, touch.touches]), [["src/app.ts", "Bob", 3]], "the 10-day-old touch is not shown");
+});
+
 test("the confirmation link goes back to the editor, for each editor the project allows", async () => {
   for (const scheme of ["vscode", "vscode-insiders"]) {
     const email = `hacky-test-link-${randomBytes(6).toString("hex")}@example.com`;

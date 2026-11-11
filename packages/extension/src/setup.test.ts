@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
-import { connectedTeamId, connectWorkspace, managedBlockIsCurrent, MANAGED_BLOCK } from "./setup.js";
+import { connectedTeamId, connectWorkspace, managedBlockIsCurrent, MANAGED_BLOCK, TOUCH_HOOK_COMMAND, withTouchHook } from "./setup.js";
 
 const CONFIG = { supabaseUrl: "https://x.supabase.co", publishableKey: "sb_publishable_x", teamId: "team-1" };
 let dir: string;
@@ -57,11 +57,11 @@ test("keeps everything already in the user's files", () => {
   assert.ok(mcp.mcpServers.hacky);
   assert.ok(read("CLAUDE.md").startsWith("# My project\n\nMy rules.\n"));
   assert.ok(read("CLAUDE.md").includes(MANAGED_BLOCK));
-  assert.deepEqual(readJson(".claude/settings.local.json"), {
-    permissions: { allow: ["Bash(ls)", "mcp__hacky"], deny: ["Read(.env)"] },
-    enabledMcpjsonServers: ["other", "hacky"],
-    model: "x",
-  });
+  const settings = readJson(".claude/settings.local.json");
+  assert.deepEqual(settings.permissions, { allow: ["Bash(ls)", "mcp__hacky"], deny: ["Read(.env)"] });
+  assert.deepEqual(settings.enabledMcpjsonServers, ["other", "hacky"]);
+  assert.equal(settings.model, "x");
+  assert.equal(settings.hooks.PostToolUse.length, 1, "the file-touch hook is added");
 });
 
 test("connecting twice changes nothing, and replaces only the managed block", () => {
@@ -194,4 +194,28 @@ test("the managed block carries the Unity rules", () => {
     assert.ok(MANAGED_BLOCK.includes(rule), `block mentions ${rule}`);
   }
   assert.ok(MANAGED_BLOCK.includes("If this is a Unity project"), "the rules only apply to Unity projects");
+});
+
+test("the file-touch hook is added once for Claude Code, next to the person's own hooks", () => {
+  mkdirSync(join(dir, ".claude"));
+  const mine = { matcher: "Bash", hooks: [{ type: "command", command: "echo hi" }] };
+  writeFileSync(join(dir, ".claude/settings.local.json"), JSON.stringify({ hooks: { PostToolUse: [mine], SessionStart: [mine] } }));
+  connectWorkspace(dir, CONFIG, "linux");
+  connectWorkspace(dir, CONFIG, "linux");
+  const hooks = readJson(".claude/settings.local.json").hooks;
+  assert.equal(hooks.PostToolUse.length, 2);
+  assert.deepEqual(hooks.PostToolUse[0], mine);
+  assert.equal(hooks.PostToolUse[1].matcher, "Edit|Write|MultiEdit|NotebookEdit");
+  assert.equal(hooks.PostToolUse[1].hooks[0].command, TOUCH_HOOK_COMMAND);
+  assert.deepEqual(hooks.SessionStart, [mine]);
+});
+
+test("Cursor and Codex get no hook, since they have no such hook", () => {
+  connectWorkspace(dir, CONFIG, "linux", ["cursor", "codex"]);
+  assert.throws(() => readJson(".claude/settings.local.json"));
+});
+
+test("withTouchHook leaves settings that already have the hook unchanged", () => {
+  const once = withTouchHook({});
+  assert.deepEqual(withTouchHook(once), once);
 });

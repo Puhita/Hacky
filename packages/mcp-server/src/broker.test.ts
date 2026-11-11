@@ -478,6 +478,48 @@ test("tasks carry an optional area, and an unknown area is rejected", async () =
   assert.equal(odd.isError, true);
 });
 
+test("get_context shows a capped overview, get_overview shows all of it, and agents have no tool to edit it", async () => {
+  const { teamId, bobAgent } = await newTeam();
+  const empty = await call(bobAgent, "get_context");
+  assert.equal(empty.project_overview, null);
+  assert.equal((await call(bobAgent, "get_overview")).idea, "");
+
+  const longArchitecture = "Layers. ".repeat(500);
+  const { error } = await admin.from("team_overview").insert({ team_id: teamId, idea: "A shared brain for agents", architecture: longArchitecture, updated_by: lead.userId });
+  assert.ifError(error);
+  const context = await call(bobAgent, "get_context");
+  assert.equal(context.project_overview.idea, "A shared brain for agents");
+  assert.equal(context.project_overview.truncated, true);
+  assert.ok(context.project_overview.architecture.length < 2100 && context.project_overview.architecture.includes("get_overview"));
+  assert.equal((await call(bobAgent, "get_overview")).architecture, longArchitecture);
+
+  const tools = (await bobAgent.listTools()).tools.map((tool) => tool.name);
+  for (const name of ["get_overview", "report_bug", "add_idea"]) assert.ok(tools.includes(name), name);
+  assert.ok(!tools.some((name) => /overview/.test(name) && name !== "get_overview"), "no tool writes the overview");
+});
+
+test("report_bug and add_idea file items on the project page, and remove secrets first", async () => {
+  const { teamId, bobAgent } = await newTeam();
+  const secret = "sb_secret_abcdefghijklmnop123456";
+  const bug = await call(bobAgent, "report_bug", { title: `Login fails with ${secret}`, details: `API_KEY=${secret}`, severity: "high" });
+  assert.equal(bug.item.kind, "bug");
+  assert.equal(bug.item.severity, "high");
+  const idea = await call(bobAgent, "add_idea", { title: "Dark mode", details: "Because" });
+  assert.equal(idea.item.kind, "idea");
+  assert.equal(idea.item.severity, null);
+
+  const { data } = await admin.from("project_items").select("kind, title, details, author_id, status").eq("team_id", teamId).order("created_at");
+  assert.ok(!JSON.stringify(data).includes(secret));
+  assert.deepEqual(data!.map((row) => row.kind), ["bug", "idea"]);
+  assert.ok(data!.every((row) => row.author_id === bob.userId && row.status === "open"));
+
+  const context = await call(bobAgent, "get_context");
+  assert.equal(context.open_bugs, 1);
+  assert.equal(context.open_ideas, 1);
+  const odd = await bobAgent.callTool({ name: "report_bug", arguments: { title: "x", severity: "catastrophic" } });
+  assert.equal(odd.isError, true);
+});
+
 test("secrets are removed before a question is embedded or stored", async () => {
   const { bobAgent } = await newTeam();
   const secret = "sb_secret_abcdefghijklmnop123456";

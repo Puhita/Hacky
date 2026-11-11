@@ -22,6 +22,9 @@ const ACTIVE_DECISIONS = 50;
 const CANDIDATE_THRESHOLD = 0.86;
 const SEARCH_MINIMUM_SIMILARITY = 0.75;
 const SEARCH_RESULTS = 5;
+// get_context shows at most this much of each overview field; get_overview returns all of it.
+const OVERVIEW_CONTEXT_CHARS = 2000;
+const BUG_SEVERITIES = ["low", "medium", "high"] as const;
 const TASK_AREAS = ["art", "code", "design", "audio"] as const;
 // Unity serializes these as text, but two people's edits to one can't be merged in practice.
 const UNMERGEABLE_UNITY_EXTENSIONS = [".unity", ".prefab", ".asset", ".mat", ".controller", ".overridecontroller", ".anim", ".mixer", ".lighting", ".playable"];
@@ -373,8 +376,19 @@ export function createServer(
       }
 
       for (const question of incoming) shownTeammateQuestions.add(question.id);
+      const overview = await readOverview();
+      const openItems = unwrapRequired(await supabase.from("project_items").select("kind").eq("team_id", teamId).eq("status", "open"));
       return {
         session_id: sessionId,
+        project_overview: overview && {
+          idea: capped(overview.idea),
+          architecture: capped(overview.architecture),
+          truncated: overview.idea.length > OVERVIEW_CONTEXT_CHARS || overview.architecture.length > OVERVIEW_CONTEXT_CHARS,
+          updated_at: overview.updated_at,
+          note: "Written by the team. Call get_overview for the full text. Only people edit it; to suggest something, call add_idea or report_bug.",
+        },
+        open_bugs: openItems.filter((item) => item.kind === "bug").length,
+        open_ideas: openItems.filter((item) => item.kind === "idea").length,
         my_tasks: openTasks.filter((task) => task.owner_id === userId),
         unclaimed_tasks: openTasks.filter((task) => task.owner_id === null),
         active_decisions: unwrap(decisions),
@@ -503,6 +517,12 @@ export function createServer(
     },
   );
 
+  const capped = (text: string) => (text.length > OVERVIEW_CONTEXT_CHARS ? text.slice(0, OVERVIEW_CONTEXT_CHARS) + " [...cut, call get_overview for the rest]" : text);
+
+  async function readOverview() {
+    return unwrap(await supabase.from("team_overview").select("idea, architecture, updated_at").eq("team_id", teamId).maybeSingle());
+  }
+
   async function overlappingTasks(userId: string, files: string[]) {
     if (files.length === 0) return [];
     const rows = unwrap(
@@ -595,6 +615,50 @@ export function createServer(
       }
       return { claimed: false, owned_by: existing.members?.display_name, title: existing.title };
     },
+  );
+
+  tool(
+    "get_overview",
+    "Read the team's project overview in full: the idea and the architecture. get_context only shows the first part of each. Read-only: people edit the overview, agents cannot.",
+    {},
+    async () => {
+      await currentUserId();
+      const overview = await readOverview();
+      return overview ?? { idea: "", architecture: "", updated_at: null, note: "The team hasn't written an overview yet." };
+    },
+  );
+
+  async function fileItem(kind: "bug" | "idea", title: string, details: string, severity?: (typeof BUG_SEVERITIES)[number]) {
+    const userId = await currentUserId();
+    const item = unwrapRequired(
+      await supabase
+        .from("project_items")
+        .insert({ team_id: teamId, kind, title: redact(title).slice(0, 200), details: redact(details).slice(0, 4000), author_id: userId, ...(severity && { severity }) })
+        .select("id, kind, title, details, severity, status")
+        .single(),
+    );
+    return { created: true, item };
+  }
+
+  tool(
+    "report_bug",
+    "File a bug you found, on the team's project page, instead of fixing it silently or asking your human. Say what is wrong, where, and how to reproduce it. Never include secrets.",
+    {
+      title: z.string().min(1).describe("One line: what is wrong"),
+      details: z.string().optional().describe("Where it shows up and how to trigger it"),
+      severity: z.enum(BUG_SEVERITIES).optional().describe("How bad it is"),
+    },
+    async ({ title, details = "", severity }) => fileItem("bug", title, details, severity),
+  );
+
+  tool(
+    "add_idea",
+    "Add an idea for the project to the team's project page. Use it for suggestions that are not part of your current task. Never include secrets.",
+    {
+      title: z.string().min(1).describe("One line: the idea"),
+      details: z.string().optional().describe("Why it would help and roughly how"),
+    },
+    async ({ title, details = "" }) => fileItem("idea", title, details),
   );
 
   tool(

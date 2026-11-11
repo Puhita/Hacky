@@ -14,9 +14,9 @@ delete env.ELECTRON_RUN_AS_NODE;
 spawnSync(electron, ["."], { env, stdio: "inherit", timeout: 120_000 });
 
 const report = JSON.parse(readFileSync(join(dir, "report.json"), "utf8"));
-const empty = ["sidebar", "board", "map"].filter((name) => !report[name]?.textLength);
+const empty = ["sidebar", "board", "map", "skills", "git", "terminal"].filter((name) => !report[name]?.textLength);
 console.log(`Screenshots and report: ${dir}`);
-if (empty.length || report.problems.length || !report.mapTabOpened) {
+if (empty.length || report.problems.length || !report.mapTabOpened || !report.terminalWorked) {
   console.error({ empty, problems: report.problems, mapTabOpened: report.mapTabOpened });
   process.exit(1);
 }

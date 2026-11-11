@@ -139,6 +139,22 @@ function writeBlockFile(file: string, header = "") {
   writeFileSync(file, existing ? withManagedBlock(existing) : `${header}${MANAGED_BLOCK}\n`);
 }
 
+// The Claude Code hook that reports which files the agent edits, so the board can show who is
+// touching what. It only sends paths, and never stops an edit.
+export const TOUCH_HOOK_COMMAND = "npx -y hacky-mcp-server touch";
+const TOUCH_HOOK_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
+
+type HookGroup = { matcher?: string; hooks?: { type?: string; command?: string }[] };
+
+// Adds the hook to the settings once, next to any hooks the person already has.
+export function withTouchHook(settings: Record<string, any>): Record<string, any> {
+  const groups: HookGroup[] = settings.hooks?.PostToolUse ?? [];
+  const present = groups.some((group) => group.hooks?.some((hook) => hook.command?.includes("hacky-mcp-server touch")));
+  if (present) return settings;
+  const group = { matcher: TOUCH_HOOK_MATCHER, hooks: [{ type: "command", command: TOUCH_HOOK_COMMAND, timeout: 15 }] };
+  return { ...settings, hooks: { ...settings.hooks, PostToolUse: [...groups, group] } };
+}
+
 export function connectWorkspace(
   dir: string,
   config: ConnectionConfig,
@@ -164,7 +180,7 @@ export function connectWorkspace(
       allow: [...new Set([...(settings.permissions?.allow ?? []), `mcp__${SERVER_NAME}`])],
     };
     mkdirSync(dirname(settingsFile), { recursive: true });
-    writeJson(settingsFile, settings);
+    writeJson(settingsFile, withTouchHook(settings));
     writeBlockFile(join(dir, "CLAUDE.md"));
   }
   if (editors.includes("cursor")) {

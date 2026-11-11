@@ -3,6 +3,13 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { createClient } from "@supabase/supabase-js";
 import { defaultCredentialsFile, fileStorage } from "./credentials.js";
 import { createServer } from "./tools.js";
+import { readStdin, runTouch } from "./touch.js";
+
+// `hacky-mcp-server touch` is run by a Claude Code hook after an edit, not as an MCP server.
+if (process.argv[2] === "touch") {
+  await runTouch(await readStdin());
+  process.exit(0);
+}
 
 const { HACKY_SUPABASE_URL, HACKY_SUPABASE_PUBLISHABLE_KEY, HACKY_TEAM_ID, HACKY_CREDENTIALS_FILE } = process.env;
 

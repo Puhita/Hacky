@@ -33,6 +33,8 @@
 
   // 16px stroke icons, as path data.
   const ICONS = {
+    git: ["M5 3v6.2M5 9.2a2 2 0 100 4 2 2 0 000-4zM5 3a1.4 1.4 0 100-.01M11 4.4a1.4 1.4 0 100-.01M11 5.8c0 2.4-2.2 2.4-5 3.4"],
+    skills: ["M8 2l1.6 3.6L13.5 6l-2.9 2.6.8 3.9L8 10.5 4.6 12.5l.8-3.9L2.5 6l3.9-.4z"],
     board: ["M2 4.5A1.5 1.5 0 013.5 3h9A1.5 1.5 0 0114 4.5v7a1.5 1.5 0 01-1.5 1.5h-9A1.5 1.5 0 012 11.5z", "M6 3v10M10 3v10"],
     map: ["M5.2 4.8l5.6-.6M4.5 6.4l2.8 4.2M11.6 5.4L8.8 10.6", "M5.2 5a1.6 1.6 0 11-3.2 0 1.6 1.6 0 013.2 0zM14 4a1.6 1.6 0 11-3.2 0A1.6 1.6 0 0114 4zM9.6 12A1.6 1.6 0 116.4 12a1.6 1.6 0 013.2 0z"],
     fold: ["M4.5 6L8 3l3.5 3M4.5 10L8 13l3.5-3"],
@@ -997,6 +999,8 @@
         el("div", { class: "acts" }, [
           iconButton("Open board", "board", () => vscode.postMessage({ type: "openBoard" })),
           Object.assign(iconButton("Open map", "map", () => vscode.postMessage({ type: "openMap" })), {}),
+          iconButton("Open skills", "skills", () => vscode.postMessage({ type: "openSkills" })),
+          iconButton("Open git", "git", () => vscode.postMessage({ type: "openGit" })),
           foldButton,
           iconButton("Group settings", "gear", () => setPage("settings")),
         ]),

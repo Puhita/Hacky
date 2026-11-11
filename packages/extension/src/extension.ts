@@ -18,6 +18,8 @@ class HackyUi {
   private readonly webviews = new Set<vscode.Webview>();
   private mapPanel: vscode.WebviewPanel | undefined;
   private boardPanel: vscode.WebviewPanel | undefined;
+  private skillsPanel: vscode.WebviewPanel | undefined;
+  private gitPanel: vscode.WebviewPanel | undefined;
 
   private sidebarView: vscode.WebviewView | undefined;
   private readonly statusBar: vscode.StatusBarItem;
@@ -76,6 +78,8 @@ class HackyUi {
       },
       openMap: () => this.openMap(),
       openBoard: () => this.openBoard(),
+      openSkills: () => this.openSkills(),
+      openGit: () => this.openGit(),
     });
   }
 
@@ -137,7 +141,47 @@ class HackyUi {
     });
   }
 
-  html(webview: vscode.Webview, mediaUri: vscode.Uri, name: "sidebar" | "map" | "board"): string {
+  openSkills(): void {
+    if (this.skillsPanel) {
+      this.skillsPanel.reveal();
+      return;
+    }
+    const mediaUri = vscode.Uri.joinPath(this.context.extensionUri, "media");
+    const panel = vscode.window.createWebviewPanel("hacky.skills", "Hacky Skills", vscode.ViewColumn.Active, {
+      enableScripts: true,
+      localResourceRoots: [mediaUri],
+      retainContextWhenHidden: true,
+    });
+    panel.webview.html = this.html(panel.webview, mediaUri, "skills");
+    const attachment = this.attach(panel.webview);
+    this.skillsPanel = panel;
+    panel.onDidDispose(() => {
+      attachment.dispose();
+      this.skillsPanel = undefined;
+    });
+  }
+
+  openGit(): void {
+    if (this.gitPanel) {
+      this.gitPanel.reveal();
+      return;
+    }
+    const mediaUri = vscode.Uri.joinPath(this.context.extensionUri, "media");
+    const panel = vscode.window.createWebviewPanel("hacky.git", "Hacky Git", vscode.ViewColumn.Active, {
+      enableScripts: true,
+      localResourceRoots: [mediaUri],
+      retainContextWhenHidden: true,
+    });
+    panel.webview.html = this.html(panel.webview, mediaUri, "git");
+    const attachment = this.attach(panel.webview);
+    this.gitPanel = panel;
+    panel.onDidDispose(() => {
+      attachment.dispose();
+      this.gitPanel = undefined;
+    });
+  }
+
+  html(webview: vscode.Webview, mediaUri: vscode.Uri, name: "sidebar" | "map" | "board" | "skills" | "git"): string {
     const nonce = randomBytes(16).toString("hex");
     const uri = (file: string) => webview.asWebviewUri(vscode.Uri.joinPath(mediaUri, file)).toString();
     return `<!DOCTYPE html>
@@ -158,6 +202,8 @@ class HackyUi {
   dispose(): void {
     this.mapPanel?.dispose();
     this.boardPanel?.dispose();
+    this.skillsPanel?.dispose();
+    this.gitPanel?.dispose();
     this.controller?.dispose();
     this.controller = undefined;
   }
@@ -194,6 +240,8 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.window.registerWebviewViewProvider("hacky.sidebar", new SidebarProvider(context, ui)),
     vscode.commands.registerCommand("hacky.openMap", () => ui.openMap()),
     vscode.commands.registerCommand("hacky.openBoard", () => ui.openBoard()),
+    vscode.commands.registerCommand("hacky.openSkills", () => ui.openSkills()),
+    vscode.commands.registerCommand("hacky.openGit", () => ui.openGit()),
     // The link's fragment holds login tokens. They're deliberately ignored: the user logs in as usual.
     vscode.window.registerUriHandler({
       handleUri: () => {
