@@ -12,9 +12,10 @@ import type {
   PulseMember,
   Team,
   TeamMember,
+  TaskArea,
 } from "./api.js";
 import { MIN_PASSWORD_LENGTH } from "./api.js";
-import { connectedTeamId, connectWorkspace, managedBlockIsCurrent } from "./setup.js";
+import { connectedTeamId, connectWorkspace, EDITORS, managedBlockIsCurrent, type Editor } from "./setup.js";
 
 const REFRESH_DEBOUNCE_MS = 300;
 // Realtime can drop silently, so the sidebar also refreshes on a timer.
@@ -24,6 +25,15 @@ const DIGEST_CHECK_MS = 60_000;
 const PULSE_WINDOW_MS = 60 * 60_000;
 
 // outdated: connected to this team, but the Hacky block in CLAUDE.md is from an older version.
+// How one folder stands against a team: not connected, connected to another team, outdated or current.
+export function folderStatus(dir: string | null, teamId: string | undefined): WorkspaceStatus {
+  if (!dir) return "none";
+  const connected = connectedTeamId(dir);
+  if (!connected) return "not_connected";
+  if (connected !== teamId) return "other_team";
+  return managedBlockIsCurrent(dir) ? "connected" : "outdated";
+}
+
 export type WorkspaceStatus = "none" | "not_connected" | "connected" | "outdated" | "other_team";
 
 export type SidebarState = {
@@ -55,13 +65,13 @@ export type Message =
   | { type: "createTeam"; name: string; displayName: string }
   | { type: "joinTeam"; code: string; displayName: string }
   | { type: "selectTeam"; teamId: string }
-  | { type: "connectWorkspace" }
+  | { type: "connectWorkspace"; editors?: Editor[] }
   | { type: "answer"; questionId: string; text: string }
   | { type: "confirmAssumption"; assumptionId: string }
   | { type: "rejectAssumption"; assumptionId: string; reason: string }
   | { type: "changeDecision"; decisionId: string; text: string }
   | { type: "withdrawDecision"; decisionId: string }
-  | { type: "addTask"; title: string }
+  | { type: "addTask"; title: string; area?: TaskArea }
   | { type: "answerTeammate"; questionId: string; text: string }
   | { type: "renameTeam"; name: string }
   | { type: "deleteTeam" }
@@ -178,7 +188,7 @@ export class SidebarController {
         this.setTeam(message.teamId);
         return;
       case "connectWorkspace":
-        return this.connect();
+        return this.connect(message.editors);
       case "answer":
         await api.answer(message.questionId, message.text.trim());
         this.notice = "Answer sent to the waiting agents.";
@@ -201,7 +211,7 @@ export class SidebarController {
         return;
       case "addTask":
         if (!this.teamId) throw new Error("Choose a team first.");
-        return api.addTask(this.teamId, message.title.trim());
+        return api.addTask(this.teamId, message.title.trim(), message.area || undefined);
       case "answerTeammate":
         await api.answerPeerQuestion(message.questionId, message.text.trim());
         this.notice = "Answer sent to your teammate's agent.";
@@ -277,16 +287,19 @@ export class SidebarController {
     }
   }
 
-  private connect(): void {
+  private connect(requested?: Editor[]): void {
     const dir = this.options.workspaceDir();
     if (!dir) throw new Error("Open a folder first.");
     if (!this.teamId) throw new Error("Choose a team first.");
-    connectWorkspace(dir, {
-      supabaseUrl: this.options.supabaseUrl,
-      publishableKey: this.options.publishableKey,
-      teamId: this.teamId,
-    });
-    this.notice = "Workspace connected. Start a new Claude Code session to use Hacky.";
+    // Messages come from a web page, so only known tool names get through.
+    const editors = requested === undefined ? undefined : EDITORS.filter((editor) => requested.includes(editor));
+    connectWorkspace(
+      dir,
+      { supabaseUrl: this.options.supabaseUrl, publishableKey: this.options.publishableKey, teamId: this.teamId },
+      process.platform,
+      editors,
+    );
+    this.notice = "Workspace connected. Start a new chat in your tool to use Hacky.";
   }
 
   private requireTeam(): string {
@@ -301,12 +314,7 @@ export class SidebarController {
   }
 
   private workspaceStatus(team: Team | null): WorkspaceStatus {
-    const dir = this.options.workspaceDir();
-    if (!dir) return "none";
-    const connected = connectedTeamId(dir);
-    if (!connected) return "not_connected";
-    if (connected !== team?.id) return "other_team";
-    return managedBlockIsCurrent(dir) ? "connected" : "outdated";
+    return folderStatus(this.options.workspaceDir(), team?.id);
   }
 
   private syncSubscription(teamId: string | undefined): void {

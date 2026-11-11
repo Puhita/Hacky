@@ -8,13 +8,14 @@ import { JSDOM } from "jsdom";
 
 const SCRIPT = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../media/sidebar.js"), "utf8");
 
-function mount() {
+function mount(host?: string) {
   const sent: any[] = [];
   const dom = new JSDOM('<!DOCTYPE html><div id="root"></div>', { runScripts: "outside-only" });
   const window = dom.window as any;
   // Serialized, as a real webview's postMessage does.
   let saved: unknown;
   window.acquireVsCodeApi = () => ({
+    host,
     postMessage: (message: unknown) => sent.push(JSON.parse(JSON.stringify(message))),
     getState: () => saved,
     setState: (value: unknown) => (saved = JSON.parse(JSON.stringify(value))),
@@ -245,7 +246,7 @@ test("the connect button shows what will be written, and goes away once connecte
   send(IN_TEAM);
   assert.match(root.textContent, /\.mcp\.json/);
   button("Connect this folder").click();
-  assert.deepEqual(sent[1], { type: "connectWorkspace" });
+  assert.deepEqual(sent[1], { type: "connectWorkspace", editors: ["claude"] });
   send({ ...IN_TEAM, workspace: "connected" });
   assert.equal(button("Connect this folder"), undefined);
   assert.match(root.textContent, /This folder is connected\./);
@@ -258,7 +259,7 @@ test("an out-of-date folder offers Update setup, which sends the same connect me
   assert.match(root.textContent, /hacky:start/);
   assert.equal(button("Connect this folder"), undefined);
   button("Update setup").click();
-  assert.deepEqual(sent.at(-1), { type: "connectWorkspace" });
+  assert.deepEqual(sent.at(-1), { type: "connectWorkspace", editors: ["claude"] });
   send({ ...IN_TEAM, workspace: "connected" });
   assert.equal(button("Update setup"), undefined);
   assert.match(root.textContent, /This folder is connected\./);
@@ -622,4 +623,54 @@ test("the groups button is just an icon next to the team name", () => {
   assert.ok(groups.querySelector("svg"));
   assert.ok(!groups.classList.contains("btn"), "no border or background of its own");
   assert.ok(!root.querySelector(".team").matches("button"));
+});
+
+test("the connect tools can be ticked, and the choice is sent and remembered", () => {
+  const { sent, send, root, button } = mount();
+  send(IN_TEAM);
+  const box = (id: string) => root.querySelector(`#tool-${id}`);
+  assert.equal(box("claude").checked, true);
+  assert.equal(box("cursor").checked, false);
+  box("cursor").checked = true;
+  box("cursor").dispatchEvent(new (root.ownerDocument.defaultView as any).Event("change"));
+  assert.match(root.textContent, /\.cursor\/mcp\.json/);
+  button("Connect this folder").click();
+  assert.deepEqual(sent.at(-1), { type: "connectWorkspace", editors: ["claude", "cursor"] });
+});
+
+test("the last ticked tool can't be unticked", () => {
+  const { send, root } = mount();
+  send(IN_TEAM);
+  const claude = root.querySelector("#tool-claude");
+  claude.checked = false;
+  claude.dispatchEvent(new (root.ownerDocument.defaultView as any).Event("change"));
+  assert.equal(root.querySelector("#tool-claude").checked, true);
+});
+
+test("the desktop app lists its folders, each with its own status and buttons", () => {
+  const { sent, send, root, button } = mount("desktop");
+  send({ ...IN_TEAM, workspace: "none", folders: [] });
+  assert.match(root.textContent, /Choose your project folder/);
+  button("Choose folder").click();
+  assert.deepEqual(sent.at(-1), { type: "chooseFolder" });
+
+  send({
+    ...IN_TEAM,
+    workspace: "connected",
+    folders: [
+      { path: "D:\Game", name: "Game", status: "connected", active: true },
+      { path: "D:\Tools", name: "Tools", status: "not_connected", active: false },
+      { path: "D:\Old", name: "Old", status: "outdated", active: false },
+    ],
+  });
+  assert.match(root.textContent, /Game.*Connected/);
+  assert.match(root.textContent, /Tools.*Not connected/);
+  button("Connect").click();
+  assert.deepEqual(sent.at(-1), { type: "connectFolder", path: "D:\Tools", editors: ["claude"] });
+  button("Update").click();
+  assert.deepEqual(sent.at(-1), { type: "connectFolder", path: "D:\Old", editors: ["claude"] });
+  button("Remove Game").click();
+  assert.deepEqual(sent.at(-1), { type: "removeFolder", path: "D:\Game" });
+  button("Add another folder").click();
+  assert.deepEqual(sent.at(-1), { type: "chooseFolder" });
 });

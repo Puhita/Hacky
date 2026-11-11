@@ -319,6 +319,21 @@ test("the task board shows owners and status, and a task can be added", async ()
   assert.deepEqual(claimed.files, ["docs.md"]);
 });
 
+test("a task can be added with an area, which shows on the board and the map; an unknown area is refused", async () => {
+  await alice.controller.handle({ type: "addTask", title: "Hero sprite", area: "art" });
+  assert.equal(alice.last().error, null);
+  const added = alice.last().tasks.find((task) => task.title === "Hero sprite")!;
+  assert.equal(added.area, "art");
+  const onMap = alice.last().map!.unassigned.find((task) => task.id === added.id)!;
+  assert.equal(onMap.area, "art");
+  const unlabelled = alice.last().tasks.find((task) => task.title.startsWith("Write docs"))!;
+  assert.equal(unlabelled.area, null);
+
+  await alice.controller.handle({ type: "addTask", title: "Odd one", area: "cooking" as never });
+  assert.ok(alice.last().error, "an unknown area is refused");
+  assert.ok(!alice.last().tasks.some((task) => task.title === "Odd one"));
+});
+
 test("the confirmation link goes back to the editor, for each editor the project allows", async () => {
   for (const scheme of ["vscode", "vscode-insiders"]) {
     const email = `hacky-test-link-${randomBytes(6).toString("hex")}@example.com`;
@@ -503,7 +518,7 @@ test("the map's tasks, decisions, stats and timeline reflect the team's work", a
   assert.deepEqual([aliceTitles[0], aliceTitles[2]], ["Own todo", "Own doing"], "not done, newest first");
   assert.equal(aliceTitles[1].length, 120, "a long title is shortened for the map");
   assert.ok(aliceTitles[1].startsWith("Own long yyy") && aliceTitles[1].endsWith("…"));
-  assert.deepEqual(owner("Alice").tasks[0], { id: owner("Alice").tasks[0].id, title: "Own todo", status: "todo", files: ["a.ts"] });
+  assert.deepEqual(owner("Alice").tasks[0], { id: owner("Alice").tasks[0].id, title: "Own todo", status: "todo", files: ["a.ts"], area: null });
   assert.equal(owner("Alice").doneTasks, 1);
   assert.equal(owner("Bob").tasks.length, 8, "a person's tasks are capped at 8");
   assert.equal(owner("Bob").tasks[0].title, "Bob extra 9", "newest first");

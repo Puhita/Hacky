@@ -104,6 +104,33 @@ button.secondary:hover {
   color: var(--map-muted);
 }
 
+.chips {
+  display: flex;
+  gap: 4px;
+}
+
+.chips[hidden] {
+  display: none;
+}
+
+.chip {
+  padding: 2px 10px;
+  border: 1px solid var(--map-line);
+  border-radius: 12px;
+  color: var(--map-muted);
+  background: transparent;
+}
+
+.chip:hover {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground, transparent);
+}
+
+.chip.on {
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-focusBorder, var(--map-active));
+}
+
 /* Stage and world */
 .stage {
   position: relative;

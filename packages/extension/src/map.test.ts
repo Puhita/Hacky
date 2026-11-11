@@ -437,3 +437,40 @@ test("the stylesheet respects reduced motion", () => {
   const css = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../media/map.css"), "utf8");
   assert.match(css, /prefers-reduced-motion: reduce[\s\S]*animation: none/);
 });
+
+test("the area filter shows only the tasks of one area, keeps the counts, and is hidden without areas", () => {
+  const { root, send } = mount();
+  send(FULL());
+  assert.equal(root.querySelector('[aria-label="Filter tasks by area"]').hidden, true);
+  const labelled = FULL({
+    owners: [
+      { id: "alice", name: "Alice", me: true, tasks: [task("t1", { area: "code" }), task("t2", { area: "art" }), task("t3")], doneTasks: 3 },
+      FULL().owners[1],
+    ],
+    unassigned: [task("u1", { area: "art" }), task("u2", { area: "audio" })],
+  });
+  send(labelled);
+  const bar = root.querySelector('[aria-label="Filter tasks by area"]');
+  assert.equal(bar.hidden, false);
+  assert.equal(root.querySelectorAll("rect.task").length, 5);
+
+  const press = (text: string) => [...bar.querySelectorAll("button")].find((node: any) => node.textContent === text).click();
+  press("art");
+  assert.equal(root.querySelectorAll("rect.task").length, 2, "one owned and one unassigned art task");
+  assert.equal(root.querySelectorAll("rect.task.unassigned").length, 1);
+  assert.match(root.querySelector(".progress").textContent, /3 of 6 tasks done/, "counts stay whole");
+  assert.equal([...bar.querySelectorAll("button")].find((node: any) => node.textContent === "art").getAttribute("aria-pressed"), "true");
+
+  press("All areas");
+  assert.equal(root.querySelectorAll("rect.task").length, 5);
+});
+
+test("filterByArea is pure and leaves other areas out", () => {
+  const { api } = mount();
+  const input = FULL({ owners: [{ id: "alice", name: "Alice", me: true, tasks: [task("t1", { area: "code" }), task("t2", { area: "art" })], doneTasks: 0 }], unassigned: [task("u1", { area: "code" })] });
+  const filtered = plain(api.filterByArea(input, "code"));
+  assert.deepEqual(filtered.owners[0].tasks.map((t: any) => t.id), ["t1"]);
+  assert.deepEqual(filtered.unassigned.map((t: any) => t.id), ["u1"]);
+  assert.equal(api.filterByArea(input, ""), input);
+  assert.equal(input.owners[0].tasks.length, 2, "the input is not changed");
+});

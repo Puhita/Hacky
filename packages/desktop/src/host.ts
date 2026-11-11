@@ -25,16 +25,30 @@ export type Tab = "board" | "map";
 export type Parsed =
   | { kind: "controller"; message: Message }
   | { kind: "showTab"; tab: Tab }
-  | { kind: "chooseFolder" };
+  | { kind: "chooseFolder" }
+  | { kind: "connectFolder"; path: string; editors: unknown }
+  | { kind: "removeFolder"; path: string };
 
 // A screen can only send what the sidebar controller or the app itself understands.
 export function parseMessage(raw: unknown): Parsed | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const message = raw as { type?: unknown; tab?: unknown };
+  const message = raw as { type?: unknown; tab?: unknown; path?: unknown; editors?: unknown };
   if (typeof message.type !== "string") return null;
   if (message.type === "chooseFolder") return { kind: "chooseFolder" };
+  if (message.type === "connectFolder") return typeof message.path === "string" ? { kind: "connectFolder", path: message.path, editors: message.editors } : null;
+  if (message.type === "removeFolder") return typeof message.path === "string" ? { kind: "removeFolder", path: message.path } : null;
   if (message.type === "showTab") return message.tab === "board" || message.tab === "map" ? { kind: "showTab", tab: message.tab } : null;
   return CONTROLLER_TYPES.has(message.type) ? { kind: "controller", message: raw as Message } : null;
+}
+
+// The project folders the person has connected, newest last. A screen can only act on a folder
+// that is in this list, so it can't make the app write somewhere else.
+export function addFolder(folders: readonly string[], path: string): string[] {
+  return folders.includes(path) ? [...folders] : [...folders, path];
+}
+
+export function removeFolder(folders: readonly string[], path: string): string[] {
+  return folders.filter((folder) => folder !== path);
 }
 
 export type PageName = "sidebar" | "board" | "map" | "tabs";

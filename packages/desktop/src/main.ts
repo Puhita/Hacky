@@ -6,8 +6,8 @@ import { defaultCredentialsFile } from "hacky-mcp-server/credentials";
 import { app, BaseWindow, dialog, ipcMain, Menu, nativeImage, Notification, protocol, Tray, WebContentsView } from "electron";
 import { confirmationUrl, HackyApi } from "../../extension/src/api.js";
 import { attentionCount, statusText } from "../../extension/src/attention.js";
-import { SidebarController, type SidebarState } from "../../extension/src/controller.js";
-import { assetPath, contentType, PAGE_NAMES, pageHtml, parseMessage, type PageName, type Tab } from "./host.js";
+import { folderStatus, SidebarController, type SidebarState } from "../../extension/src/controller.js";
+import { addFolder, assetPath, contentType, PAGE_NAMES, pageHtml, parseMessage, removeFolder, type PageName, type Tab } from "./host.js";
 import { runSmoke } from "./smoke.js";
 import { installUpdateNow, startUpdates } from "./updater.js";
 
@@ -19,7 +19,8 @@ const TAB_BAR_HEIGHT = 40;
 const smokeDir = process.env.HACKY_SMOKE_DIR;
 
 // The app's own settings. The sign-in itself is in the shared credentials file.
-type Settings = { teamId?: string; digestAt?: number; folder?: string };
+// "folder" is the one the sidebar acts on; "folders" are all the connected project folders.
+type Settings = { teamId?: string; digestAt?: number; folder?: string; folders?: string[] };
 const settingsFile = () => join(app.getPath("userData"), "settings.json");
 let settings: Settings = {};
 function loadSettings(): void {
@@ -28,6 +29,8 @@ function loadSettings(): void {
   } catch {
     settings = {};
   }
+  // Versions before 0.1.2 kept a single folder.
+  if (settings.folder && !settings.folders?.includes(settings.folder)) settings.folders = addFolder(settings.folders ?? [], settings.folder);
 }
 function saveSettings(change: Partial<Settings>): void {
   settings = { ...settings, ...change };
@@ -144,8 +147,14 @@ function createController(): SidebarController {
     loadTeamId: () => settings.teamId,
     saveTeamId: (teamId) => saveSettings({ teamId }),
     post: (state) => {
-      // The screens also show which folder is chosen.
-      const data = { ...state, folder: settings.folder ? basename(settings.folder) : null };
+      // The screens also show the connected folders and how each one stands.
+      const folders = (settings.folders ?? []).map((path) => ({
+        path,
+        name: basename(path),
+        status: folderStatus(path, state.team?.id),
+        active: path === settings.folder,
+      }));
+      const data = { ...state, folder: settings.folder ? basename(settings.folder) : null, folders };
       for (const name of ["sidebar", "board", "map"] as const) views[name].webContents.send("hacky:state", data);
       showAttention(state);
     },
@@ -171,7 +180,22 @@ function createController(): SidebarController {
 async function chooseFolder(): Promise<void> {
   const result = await dialog.showOpenDialog({ title: "Choose the project folder to connect", properties: ["openDirectory"] });
   if (result.canceled || !result.filePaths[0]) return;
-  saveSettings({ folder: result.filePaths[0] });
+  saveSettings({ folder: result.filePaths[0], folders: addFolder(settings.folders ?? [], result.filePaths[0]) });
+  await controller?.refresh();
+}
+
+// Acts only on folders the person has already added.
+async function connectFolder(path: string, editors: unknown): Promise<void> {
+  if (!settings.folders?.includes(path)) return;
+  saveSettings({ folder: path });
+  const chosen = Array.isArray(editors) ? editors : undefined;
+  await controller?.handle({ type: "connectWorkspace", editors: chosen });
+}
+
+async function dropFolder(path: string): Promise<void> {
+  if (!settings.folders?.includes(path)) return;
+  const folders = removeFolder(settings.folders, path);
+  saveSettings({ folders, folder: settings.folder === path ? folders[0] : settings.folder });
   await controller?.refresh();
 }
 
@@ -180,6 +204,8 @@ function handleMessage(raw: unknown): void {
   if (!parsed) return;
   if (parsed.kind === "showTab") showTab(parsed.tab);
   else if (parsed.kind === "chooseFolder") void chooseFolder();
+  else if (parsed.kind === "connectFolder") void connectFolder(parsed.path, parsed.editors);
+  else if (parsed.kind === "removeFolder") void dropFolder(parsed.path);
   else {
     // A screen that has just loaded missed which tab is showing.
     if (parsed.message.type === "ready") views.tabs.webContents.send("hacky:state", { activeTab });

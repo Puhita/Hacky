@@ -18,7 +18,9 @@
   const folds = { ...(saved.folds ?? {}) };
   // "" shows everyone's tasks, otherwise only the tasks of the person with that name.
   let taskFilter = typeof saved.taskFilter === "string" ? saved.taskFilter : "";
-  const persist = () => vscode.setState({ tab, messageFilter, activityFilter, taskFilter, folds });
+  // "" shows every area, otherwise only tasks with that area label.
+  let areaFilter = typeof saved.areaFilter === "string" ? saved.areaFilter : "";
+  const persist = () => vscode.setState({ tab, messageFilter, activityFilter, taskFilter, areaFilter, folds });
 
   const drafts = new Map(); // half-typed text, by field id
   const rejecting = new Set(); // assumption ids whose reject box is open
@@ -191,6 +193,8 @@
 
   // ---- Tasks ----
 
+  const AREAS = ["art", "code", "design", "audio"];
+
   const TASK_COLUMNS = [
     ["todo", "To do", "idle"],
     ["in_progress", "In progress", "work"],
@@ -200,6 +204,7 @@
   function renderTask(task, kind, memberIndex) {
     return el("article", { class: "tc" }, [
       el("div", { class: "tc-top" }, [glyph(kind), el("span", { class: "hl cl2", text: task.title })]),
+      task.area ? el("div", { class: "files" }, [el("span", { class: `area area-${task.area}`, text: task.area })]) : null,
       (task.files ?? []).length > 0 ? el("div", { class: "files" }, task.files.map((file) => el("span", { class: "file tr", text: file }))) : null,
       el("div", { class: "tc-foot" }, [
         task.owner
@@ -211,9 +216,13 @@
 
   function renderTasks(state) {
     const title = el("input", { type: "text", class: "in", id: "new-task", name: "title", "aria-label": "New task", placeholder: "What needs doing?" });
+    const area = el("select", { class: "in", id: "new-task-area", name: "area", "aria-label": "Area" }, [
+      el("option", { value: "", text: "No area" }),
+      ...AREAS.map((name) => el("option", { value: name, text: name })),
+    ]);
     const add = () => {
       if (title.value.trim() === "") return;
-      vscode.postMessage({ type: "addTask", title: title.value });
+      vscode.postMessage({ type: "addTask", title: title.value, ...(area.value && { area: area.value }) });
     };
     title.onkeydown = (event) => event.key === "Enter" && add();
     const names = state.pulse.map((member) => member.name);
@@ -235,10 +244,26 @@
         },
         [document.createTextNode(label), el("span", { class: "chip-n", text: String(total) })],
       );
-    const shown = state.tasks.filter((task) => !taskFilter || task.owner === taskFilter);
+    const areaChip = (value, label) =>
+      el(
+        "button",
+        {
+          type: "button",
+          class: `chip${areaFilter === value ? " on" : ""}`,
+          "aria-pressed": String(areaFilter === value),
+          onclick: () => {
+            areaFilter = value;
+            persist();
+            render(lastState);
+          },
+        },
+        [document.createTextNode(label), el("span", { class: "chip-n", text: String(state.tasks.filter((task) => !value || task.area === value).length) })],
+      );
+    const shown = state.tasks.filter((task) => (!taskFilter || task.owner === taskFilter) && (!areaFilter || task.area === areaFilter));
     return el("div", { class: "bc-in" }, [
       el("div", { class: "addtask" }, [
         el("div", { class: "f1" }, [el("label", { for: "new-task", text: "New task" }), title]),
+        el("div", {}, [el("label", { for: "new-task-area", text: "Area" }), area]),
         button("Add task", "cta", add, "plus"),
       ]),
       names.length > 1
@@ -246,6 +271,9 @@
             chip("", "Everyone", state.tasks.length),
             ...names.map((name) => chip(name, name, countFor(name))),
           ])
+        : null,
+      state.tasks.some((task) => task.area)
+        ? el("div", { class: "chips", role: "group", "aria-label": "Filter tasks by area" }, [areaChip("", "All areas"), ...AREAS.map((name) => areaChip(name, name))])
         : null,
       el(
         "div",

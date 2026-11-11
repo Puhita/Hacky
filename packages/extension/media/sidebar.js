@@ -121,7 +121,11 @@
   // A full-screen page over the views: null, "groups", "settings" (this group) or "profile".
   let page = null;
   const confirming = new Set(); // keys of two-step buttons that are waiting for their second click
-  const persist = () => vscode.setState({ folds, view });
+  // Which tools "Connect" writes config for: Claude Code, Cursor, Codex. Remembered between sessions.
+  const TOOLS = [["claude", "Claude Code"], ["cursor", "Cursor"], ["codex", "Codex"]];
+  let editors = TOOLS.map((tool) => tool[0]).filter((id) => (saved.editors ?? ["claude"]).includes(id));
+  if (!editors.length) editors = ["claude"];
+  const persist = () => vscode.setState({ folds, view, editors });
 
   const drafts = new Map(); // half-typed text, by field id
   const more = new Set(); // question ids whose context is shown in full
@@ -1054,36 +1058,78 @@
   function renderWorkspace(state) {
     const outdated = state.workspace === "outdated";
     const canConnect = state.workspace === "not_connected" || state.workspace === "other_team" || outdated;
-    const connect = () => vscode.postMessage({ type: "connectWorkspace" });
-    // The desktop app has no open folder of its own, so the person picks one.
-    const desktop = vscode.host === "desktop";
-    const choose = () => vscode.postMessage({ type: "chooseFolder" });
-    const chooseButton = (label, cls) => Object.assign(el("button", { type: "button", class: cls }, [icon("folder"), document.createTextNode(label)]), { onclick: choose });
-    const named = (text) => (desktop && state.folder ? `${state.folder}: ${text}` : text);
+    if (vscode.host === "desktop") return renderFolders(state);
+    const connect = () => vscode.postMessage({ type: "connectWorkspace", editors });
     if (state.workspace === "connected") {
-      return el("div", { class: "foot" }, [
-        glyph("done"),
-        el("span", { class: "ft tr", text: named(WORKSPACE_TEXT.connected) }),
-        desktop ? chooseButton("Change", "btn") : null,
-      ]);
+      return el("div", { class: "foot" }, [glyph("done"), el("span", { class: "ft tr", text: WORKSPACE_TEXT.connected })]);
     }
     return el("div", { class: "foot off" }, [
-      el("div", { class: "row2" }, [
-        glyph(canConnect ? "wait" : "idle"),
-        el("p", { text: desktop && state.workspace === "none" ? "Choose your project folder to connect it to this team." : named(WORKSPACE_TEXT[state.workspace]) }),
-      ]),
+      el("div", { class: "row2" }, [glyph(canConnect ? "wait" : "idle"), el("p", { text: WORKSPACE_TEXT[state.workspace] })]),
+      canConnect ? renderTools() : null,
       canConnect
         ? el("p", {
             class: "hint",
             text: outdated
-              ? "Updating replaces only the block between the hacky:start and hacky:end markers in CLAUDE.md. Start a new Claude Code chat afterwards."
-              : "This writes .mcp.json and a block in CLAUDE.md, and allows the Hacky tools in .claude/settings.local.json.",
+              ? `Updating replaces only the block between the hacky:start and hacky:end markers. Start a new chat afterwards. ${writesText()}`
+              : writesText(),
           })
         : null,
       canConnect
         ? Object.assign(el("button", { type: "button", class: "btn pri full" }, [icon("folder"), document.createTextNode(outdated ? "Update setup" : "Connect this folder")]), { onclick: connect })
         : null,
-      desktop ? chooseButton(state.workspace === "none" ? "Choose folder" : "Choose another folder", state.workspace === "none" ? "btn pri full" : "btn full") : null,
+    ]);
+  }
+
+  const TOOL_FILES = {
+    claude: ".mcp.json and a block in CLAUDE.md, and allows the Hacky tools in .claude/settings.local.json",
+    cursor: ".cursor/mcp.json and .cursor/rules/hacky.mdc",
+    codex: ".codex/config.toml and a block in AGENTS.md (Codex only reads a project's config once you've marked the folder as trusted)",
+  };
+  const writesText = () => `This writes ${editors.map((id) => TOOL_FILES[id]).join("; ")}.`;
+
+  // Checkboxes for the tools to connect. At least one stays ticked.
+  function renderTools() {
+    return el("div", { class: "tools" }, [
+      el("span", { class: "hint", text: "Connect for" }),
+      ...TOOLS.map(([id, label]) => {
+        const box = el("input", { type: "checkbox", id: `tool-${id}` });
+        box.checked = editors.includes(id);
+        box.onchange = () => {
+          const next = TOOLS.map((tool) => tool[0]).filter((tool) => (tool === id ? box.checked : editors.includes(tool)));
+          if (!next.length) box.checked = true;
+          else editors = next;
+          persist();
+          render(lastState);
+        };
+        return el("label", { for: `tool-${id}` }, [box, document.createTextNode(label)]);
+      }),
+    ]);
+  }
+
+  const FOLDER_STATUS = { connected: "Connected", not_connected: "Not connected", outdated: "Out of date", other_team: "Other team" };
+
+  // The desktop app has no open folder, so it keeps a list of the project folders the person added.
+  function renderFolders(state) {
+    const folders = state.folders ?? [];
+    const post = (message) => () => vscode.postMessage(message);
+    const row = (folder) =>
+      el("div", { class: "frow" }, [
+        glyph(folder.status === "connected" ? "done" : "wait"),
+        el("span", { class: "ft tr", title: folder.path, text: folder.name }),
+        el("span", { class: "hint", text: FOLDER_STATUS[folder.status] ?? "" }),
+        Object.assign(el("button", { type: "button", class: folder.status === "connected" ? "btn" : "btn pri", text: folder.status === "outdated" ? "Update" : folder.status === "connected" ? "Reconnect" : "Connect" }), {
+          onclick: post({ type: "connectFolder", path: folder.path, editors }),
+        }),
+        Object.assign(el("button", { type: "button", class: "lnk", text: "Remove", "aria-label": `Remove ${folder.name}` }), { onclick: post({ type: "removeFolder", path: folder.path }) }),
+      ]);
+    return el("div", { class: "foot off" }, [
+      el("p", { text: folders.length ? "Connected project folders" : "Choose your project folder to connect it to this team." }),
+      ...folders.map(row),
+      folders.length ? renderTools() : null,
+      folders.length ? el("p", { class: "hint", text: writesText() }) : null,
+      Object.assign(el("button", { type: "button", class: folders.length ? "btn full" : "btn pri full" }, [icon("folder"), document.createTextNode(folders.length ? "Add another folder" : "Choose folder")]), {
+        onclick: post({ type: "chooseFolder" }),
+      }),
     ]);
   }
 

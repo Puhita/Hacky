@@ -17,6 +17,7 @@
   const CARD = { w: 240, h: 130, gap: 8 };
   const TIMELINE = { labelGap: 150, labelMax: 26 };
   const SVG_NS = "http://www.w3.org/2000/svg";
+  const AREAS = ["art", "code", "design", "audio"];
 
   // ---- Pure functions (also exposed on window.HackyMap for tests) ----
 
@@ -36,6 +37,17 @@
       activeChats: map.chats.filter((chat) => chat.state === "active").length,
     };
     return { ...map, owners, threads, unassigned: map.unassigned || [], decisions: map.decisions || [], stats, timeline: map.timeline || null };
+  }
+
+  // The map with only the tasks of one area; "" keeps everything. Counts and the timeline stay whole.
+  function filterByArea(map, area) {
+    if (!area) return map;
+    const keep = (task) => task.area === area;
+    return {
+      ...map,
+      owners: map.owners.map((owner) => ({ ...owner, tasks: (owner.tasks || []).filter(keep) })),
+      unassigned: (map.unassigned || []).filter(keep),
+    };
   }
 
   // The chats of one person worth drawing: live ones first, then newest, capped.
@@ -255,7 +267,7 @@
   }
 
   window.HackyMap = {
-    normalize, pickChats, pickTasks, layout, links, threadLinks, diff, placeCards,
+    normalize, filterByArea, AREAS, pickChats, pickTasks, layout, links, threadLinks, diff, placeCards,
     zoomAt, fitView, contentBounds, detailLevel, clampScale, agoText, timelineLayout,
     MAX_CHATS, MAX_TASKS, ZOOM, LOD,
   };
@@ -316,7 +328,28 @@
     el("span", { class: "key assumption", text: "assumption" }),
     el("span", { class: "key agent", text: "agent to agent" }),
   ]);
-  const bar = el("header", {}, [logo(), title, legend, el("div", { class: "zoom" }, [zoomOut, zoomIn, fitButton])]);
+  // Area filter: only shown once some task has an area label.
+  let areaFilter = (typeof vscode.getState === "function" && (vscode.getState() || {}).areaFilter) || "";
+  const areaButtons = ["", ...AREAS].map((value) =>
+    el("button", {
+      type: "button",
+      class: "chip" + (areaFilter === value ? " on" : ""),
+      "aria-pressed": String(areaFilter === value),
+      text: value || "All areas",
+      onclick: () => {
+        areaFilter = value;
+        if (typeof vscode.setState === "function") vscode.setState({ areaFilter });
+        areaButtons.forEach((node, i) => {
+          const on = ["", ...AREAS][i] === areaFilter;
+          node.classList.toggle("on", on);
+          node.setAttribute("aria-pressed", String(on));
+        });
+        if (lastRaw) apply(lastRaw);
+      },
+    }),
+  );
+  const areaBar = el("div", { class: "chips", role: "group", "aria-label": "Filter tasks by area", hidden: "" }, areaButtons);
+  const bar = el("header", {}, [logo(), title, legend, areaBar, el("div", { class: "zoom" }, [zoomOut, zoomIn, fitButton])]);
 
   const sceneSvg = svg("svg", { class: "scene", role: "img", "aria-label": "Team map" });
   const edges = svg("g");
@@ -331,7 +364,8 @@
   const timelineBox = el("footer", { class: "timeline" });
   root.append(bar, stage, timelineBox);
 
-  let lastMap = null; // normalized map that is drawn
+  let lastRaw = null; // the map as the extension sent it
+  let lastMap = null; // normalized, filtered map that is drawn
   let lay = null;
   let cardSpots = {};
   let view = { x: 0, y: 0, k: 1 };
@@ -480,7 +514,7 @@
         const spot = lay.tasks[task.id];
         if (!spot) continue;
         const dot = svg("rect", { class: "task " + task.status, x: spot.x - SIZE.task, y: spot.y - SIZE.task, width: SIZE.task * 2, height: SIZE.task * 2, rx: 2 });
-        dot.appendChild(svg("title", {}, task.title));
+        dot.appendChild(svg("title", {}, task.area ? `${task.title} (${task.area})` : task.title));
         nodes.appendChild(dot);
         nodes.appendChild(label(spot.x, spot.y + SIZE.task + 12, clip(task.title, 28), 2, "task-label"));
         if (task.files && task.files.length) nodes.appendChild(label(spot.x, spot.y + SIZE.task + 24, clip(task.files.slice(0, 2).join(", "), 36), 3, "muted"));
@@ -626,8 +660,13 @@
     timelineBox.append(el("div", { class: "track" }, [axis, dates]));
   }
 
+  const hasAreas = (input) =>
+    [...(input.unassigned || []), ...input.owners.flatMap((owner) => owner.tasks || [])].some((task) => task.area);
+
   function apply(input) {
-    const map = normalize(input);
+    lastRaw = input;
+    areaBar.hidden = !hasAreas(input);
+    const map = normalize(filterByArea(input, areaFilter));
     const changes = diff(lastMap, map);
     const first = !lastMap;
     lastMap = map;
@@ -652,6 +691,7 @@
   }
 
   function clear() {
+    lastRaw = null;
     lastMap = null;
     lay = null;
     cardSpots = {};

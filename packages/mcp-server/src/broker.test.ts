@@ -436,6 +436,48 @@ test("claim_task warns about a teammate working on the same files", async () => 
   assert.equal((await call(carolAgent, "claim_task", { task_id: noFiles.id })).overlapping_tasks, undefined);
 });
 
+test("claim_task warns loudly when a teammate holds the same Unity scene or prefab", async () => {
+  const { bobAgent, carolAgent } = await newTeam();
+  const { task: bobTask } = await call(bobAgent, "create_task", { title: "Level 1", files: ["Assets/Scenes/Level1.UNITY", "Assets/Scripts/Player.cs", "Assets/Prefabs/Hero.prefab"] });
+  await call(bobAgent, "claim_task", { task_id: bobTask.id });
+
+  const { task: scene } = await call(carolAgent, "create_task", { title: "Lighting", files: ["Assets/Scenes/Level1.UNITY", "Assets/Prefabs/Hero.prefab", "Assets/Scripts/Player.cs"] });
+  const claimed = await call(carolAgent, "claim_task", { task_id: scene.id });
+  assert.equal(claimed.claimed, true);
+  assert.match(claimed.warning, /can't be merged/);
+  assert.deepEqual(claimed.overlapping_tasks[0].unmergeable_files, ["Assets/Scenes/Level1.UNITY", "Assets/Prefabs/Hero.prefab"], "extensions match in any case, code files are not listed");
+  assert.deepEqual(claimed.overlapping_tasks[0].shared_files.length, 3);
+});
+
+test("claim_task adds no Unity warning for shared code, or for a Unity file nobody else holds", async () => {
+  const { bobAgent, carolAgent } = await newTeam();
+  const { task: bobTask } = await call(bobAgent, "create_task", { title: "Player", files: ["Assets/Scripts/Player.cs"] });
+  await call(bobAgent, "claim_task", { task_id: bobTask.id });
+  const { task: code } = await call(carolAgent, "create_task", { title: "Player fix", files: ["Assets/Scripts/Player.cs"] });
+  const shared = await call(carolAgent, "claim_task", { task_id: code.id });
+  assert.equal(shared.warning, undefined);
+  assert.equal(shared.overlapping_tasks[0].unmergeable_files, undefined);
+
+  const { task: ownScene } = await call(carolAgent, "create_task", { title: "Menu", files: ["Assets/Scenes/Menu.unity"] });
+  const alone = await call(carolAgent, "claim_task", { task_id: ownScene.id });
+  assert.equal(alone.warning, undefined);
+  assert.equal(alone.overlapping_tasks, undefined);
+});
+
+test("tasks carry an optional area, and an unknown area is rejected", async () => {
+  const { bobAgent } = await newTeam();
+  const { task } = await call(bobAgent, "create_task", { title: "Hero sprite", area: "art" });
+  assert.equal(task.area, "art");
+  const claimed = await call(bobAgent, "claim_task", { task_id: task.id });
+  assert.equal(claimed.task.area, "art");
+  const { task: plain } = await call(bobAgent, "create_task", { title: "Anything" });
+  assert.equal(plain.area, null);
+  const context = await call(bobAgent, "get_context");
+  assert.equal(context.my_tasks.find((mine: any) => mine.id === task.id).area, "art");
+  const odd = await bobAgent.callTool({ name: "create_task", arguments: { title: "Odd", area: "cooking" } });
+  assert.equal(odd.isError, true);
+});
+
 test("secrets are removed before a question is embedded or stored", async () => {
   const { bobAgent } = await newTeam();
   const secret = "sb_secret_abcdefghijklmnop123456";

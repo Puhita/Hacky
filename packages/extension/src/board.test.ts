@@ -247,3 +247,38 @@ test("the task filter is hidden when the team is one person, and the Add task bu
   assert.equal(root.querySelector('[aria-label="Filter tasks by person"]'), null);
   assert.ok(root.querySelector(".addtask .btn.cta svg"));
 });
+
+test("a new task can be given an area, and tasks can be filtered by area", () => {
+  const { sent, send, root, click } = mount();
+  const tasks = [
+    { id: "1", title: "Plan it", status: "todo", files: [], area: "design", owner: null },
+    { id: "2", title: "Build it", status: "in_progress", files: [], area: "code", owner: "Bob" },
+    { id: "3", title: "Ship it", status: "done", files: [], area: null, owner: "Alice" },
+  ];
+  send({ ...STATE, tasks });
+  const areaChips = () => [...root.querySelectorAll('[aria-label="Filter tasks by area"] .chip')].map((node: any) => node.textContent);
+  assert.deepEqual(areaChips(), ["All areas3", "art0", "code1", "design1", "audio0"]);
+  const shown = () => [...root.querySelectorAll(".tc .hl")].map((node: any) => node.textContent);
+  assert.match(root.querySelector(".area-design").textContent, /design/);
+
+  click("code");
+  assert.deepEqual(shown(), ["Build it"]);
+  click("All areas");
+  assert.deepEqual(shown(), ["Plan it", "Build it", "Ship it"]);
+
+  root.querySelector('[name="title"]').value = "Draw hero";
+  root.querySelector('[name="area"]').value = "art";
+  click("Add task");
+  assert.deepEqual(sent[1], { type: "addTask", title: "Draw hero", area: "art" });
+});
+
+test("the area filter is hidden until some task has an area, and it survives a refresh", () => {
+  const { send, root, click } = mount();
+  send(STATE);
+  assert.equal(root.querySelector('[aria-label="Filter tasks by area"]'), null);
+  const tasks = [{ id: "1", title: "Plan it", status: "todo", files: [], area: "audio", owner: null }, { id: "2", title: "Other", status: "todo", files: [], area: "art", owner: null }];
+  send({ ...STATE, tasks });
+  click("audio");
+  send({ ...STATE, tasks });
+  assert.deepEqual([...root.querySelectorAll(".tc .hl")].map((node: any) => node.textContent), ["Plan it"]);
+});

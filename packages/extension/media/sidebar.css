@@ -237,6 +237,10 @@ body { margin: 0; padding: 0; font: var(--vscode-font-size, 13px)/1.45 var(--vsc
 .foot.off p { font-size: 12px; line-height: 1.45; }
 .foot.off .hint { font-size: 11.5px; }
 .foot.off .gl { width: 16px; height: 16px; }
+.tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; font-size: 12px; }
+.tools label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.frow { display: flex; align-items: center; gap: 8px; }
+.frow .ft { flex: 1; min-width: 0; }
 .row2 { display: flex; align-items: flex-start; gap: 8px; }
 .account { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--dim); }
 

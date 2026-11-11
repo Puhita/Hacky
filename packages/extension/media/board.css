@@ -147,6 +147,11 @@ body { margin: 0; padding: 0; font: var(--vscode-font-size, 13px)/1.45 var(--vsc
 .tc:hover { border-color: color-mix(in srgb, var(--fg) 28%, var(--line)); }
 .tc-top { display: flex; gap: 9px; }
 .hl { font-weight: 600; line-height: 1.35; }
+.area { font: 600 10px var(--font, inherit); text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim); }
+.area-art { border-color: var(--vscode-charts-orange, #d18616); }
+.area-code { border-color: var(--vscode-charts-blue, #3794ff); }
+.area-design { border-color: var(--vscode-charts-purple, #b180d7); }
+.area-audio { border-color: var(--vscode-charts-green, #89d185); }
 .files { display: flex; flex-wrap: wrap; gap: 5px; }
 .file { font: 11px var(--mono); padding: 2px 7px; border-radius: 4px; background: color-mix(in srgb, var(--fg) 8%, transparent); max-width: 100%; }
 .tc-foot { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }

@@ -122,3 +122,76 @@ test("connecting again brings an older block up to date and keeps the rest", () 
   assert.equal(managedBlockIsCurrent(dir), true);
   assert.equal(read("CLAUDE.md"), `Before\n\n${MANAGED_BLOCK}\n\nAfter\n`);
 });
+
+test("connects Cursor with its own config and rules file", () => {
+  connectWorkspace(dir, CONFIG, "linux", ["cursor"]);
+  assert.equal(readJson(".cursor/mcp.json").mcpServers.hacky.env.HACKY_TEAM_ID, "team-1");
+  const rules = read(".cursor/rules/hacky.mdc");
+  assert.ok(rules.startsWith("---\ndescription:"));
+  assert.ok(rules.includes("alwaysApply: true"));
+  assert.ok(rules.includes(MANAGED_BLOCK));
+  assert.throws(() => read(".mcp.json"), "Claude Code's files are untouched");
+  assert.throws(() => read("CLAUDE.md"));
+  assert.equal(connectedTeamId(dir), "team-1");
+  assert.equal(managedBlockIsCurrent(dir), true);
+});
+
+test("connects Codex with a TOML section and AGENTS.md", () => {
+  writeFileSync(join(dir, "AGENTS.md"), "# Mine\n");
+  mkdirSync(join(dir, ".codex"));
+  writeFileSync(join(dir, ".codex/config.toml"), 'model = "gpt-x"\n\n[mcp_servers.other]\ncommand = "other"\n');
+  connectWorkspace(dir, CONFIG, "win32", ["codex"]);
+  const toml = read(".codex/config.toml");
+  assert.ok(toml.startsWith('model = "gpt-x"\n\n[mcp_servers.other]\ncommand = "other"\n'));
+  assert.ok(toml.includes('[mcp_servers.hacky]\ncommand = "cmd"\nargs = ["/c", "npx", "-y", "hacky-mcp-server"]'));
+  assert.ok(toml.includes('HACKY_TEAM_ID = "team-1"'));
+  assert.ok(read("AGENTS.md").startsWith("# Mine\n"));
+  assert.ok(read("AGENTS.md").includes(MANAGED_BLOCK));
+  assert.equal(connectedTeamId(dir), "team-1");
+});
+
+test("connecting Codex again replaces only its own section", () => {
+  connectWorkspace(dir, CONFIG, "linux", ["codex"]);
+  connectWorkspace(dir, { ...CONFIG, teamId: "team-2" }, "linux", ["codex"]);
+  const toml = read(".codex/config.toml");
+  assert.equal(toml.match(/\[mcp_servers\.hacky\]/g)?.length, 1);
+  assert.equal(connectedTeamId(dir), "team-2");
+});
+
+test("Codex refuses a hacky server it didn't write", () => {
+  mkdirSync(join(dir, ".codex"));
+  writeFileSync(join(dir, ".codex/config.toml"), '[mcp_servers.hacky]\ncommand = "x"\n');
+  assert.throws(() => connectWorkspace(dir, CONFIG, "linux", ["codex"]), /already defines a hacky server/);
+  assert.equal(read(".codex/config.toml"), '[mcp_servers.hacky]\ncommand = "x"\n');
+});
+
+test("connects several tools at once, and one broken file stops all of them", () => {
+  connectWorkspace(dir, CONFIG, "linux", ["claude", "cursor", "codex"]);
+  assert.ok(read(".mcp.json") && read(".cursor/mcp.json") && read(".codex/config.toml"));
+  const other = mkdtempSync(join(tmpdir(), "hacky-setup-"));
+  try {
+    mkdirSync(join(other, ".cursor"));
+    writeFileSync(join(other, ".cursor/mcp.json"), "{ nope");
+    assert.throws(() => connectWorkspace(other, CONFIG, "linux", ["claude", "cursor"]), /isn't valid JSON/);
+    assert.throws(() => readFileSync(join(other, ".mcp.json")), "nothing was written");
+  } finally {
+    rmSync(other, { recursive: true, force: true });
+  }
+});
+
+test("an outdated block in any tool's file counts as outdated", () => {
+  connectWorkspace(dir, CONFIG, "linux", ["claude", "codex"]);
+  writeFileSync(join(dir, "AGENTS.md"), "<!-- hacky:start -->\nold\n<!-- hacky:end -->\n");
+  assert.equal(managedBlockIsCurrent(dir), false);
+});
+
+test("needs at least one tool", () => {
+  assert.throws(() => connectWorkspace(dir, CONFIG, "linux", []), /at least one/);
+});
+
+test("the managed block carries the Unity rules", () => {
+  for (const rule of ["Library/", ".meta", "guid", ".unity", ".prefab", "unmergeable_files", "ask_teammate"]) {
+    assert.ok(MANAGED_BLOCK.includes(rule), `block mentions ${rule}`);
+  }
+  assert.ok(MANAGED_BLOCK.includes("If this is a Unity project"), "the rules only apply to Unity projects");
+});

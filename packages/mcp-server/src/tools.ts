@@ -22,7 +22,13 @@ const ACTIVE_DECISIONS = 50;
 const CANDIDATE_THRESHOLD = 0.86;
 const SEARCH_MINIMUM_SIMILARITY = 0.75;
 const SEARCH_RESULTS = 5;
-const NOT_LOGGED_IN = "Not logged in to Hacky. Log in from the Hacky sidebar in VS Code, then try again.";
+const TASK_AREAS = ["art", "code", "design", "audio"] as const;
+// Unity serializes these as text, but two people's edits to one can't be merged in practice.
+const UNMERGEABLE_UNITY_EXTENSIONS = [".unity", ".prefab", ".asset", ".mat", ".controller", ".overridecontroller", ".anim", ".mixer", ".lighting", ".playable"];
+const UNMERGEABLE_WARNING =
+  "A teammate is working on a Unity scene, prefab or similar file this task touches (see unmergeable_files). Two people's edits to these files can't be merged, so one of them would be lost. Do not edit those files yet: call ask_teammate to agree with the owner who goes first, or do the rest of the task and leave them.";
+const isUnmergeableUnityFile = (file: string) => UNMERGEABLE_UNITY_EXTENSIONS.some((extension) => file.toLowerCase().endsWith(extension));
+const NOT_LOGGED_IN ="Not logged in to Hacky. Log in from the Hacky sidebar in VS Code, then try again.";
 
 type Result<T> = { data: T; error: { message: string } | null };
 
@@ -312,7 +318,7 @@ export function createServer(
       const userId = await currentUserId();
       const windowStart = new Date(Date.now() - PREVIOUS_SESSION_DAYS * 86_400_000).toISOString();
       const [tasks, decisions, events, ownEvents, waiters, notices, sessions, teamMembers, incoming, teammateAnswers] = await Promise.all([
-        supabase.from("tasks").select("id, title, status, files, owner_id").eq("team_id", teamId).neq("status", "done"),
+        supabase.from("tasks").select("id, title, status, files, area, owner_id").eq("team_id", teamId).neq("status", "done"),
         supabase
           .from("decisions")
           .select("id, text, created_at")
@@ -508,16 +514,21 @@ export function createServer(
         .neq("owner_id", userId)
         .overlaps("files", files),
     ) as unknown as { title: string; files: string[]; members: { display_name: string } | null }[];
-    return rows.map((row) => ({
-      title: row.title,
-      owner: row.members?.display_name,
-      shared_files: row.files.filter((file) => files.includes(file)),
-    }));
+    return rows.map((row) => {
+      const shared = row.files.filter((file) => files.includes(file));
+      const unmergeable = shared.filter(isUnmergeableUnityFile);
+      return {
+        title: row.title,
+        owner: row.members?.display_name,
+        shared_files: shared,
+        ...(unmergeable.length > 0 && { unmergeable_files: unmergeable }),
+      };
+    });
   }
 
   tool(
     "claim_task",
-    "Take an unclaimed task so no teammate duplicates the work. Check the result: if claimed is false, a teammate already owns it, so don't work on it. If it lists overlapping_tasks, a teammate is working on the same files, so keep your changes to them small and tell your human.",
+    "Take an unclaimed task so no teammate duplicates the work. Check the result: if claimed is false, a teammate already owns it, so don't work on it. If it lists overlapping_tasks, a teammate is working on the same files, so keep your changes to them small and tell your human. If it also has a warning about unmergeable_files (Unity scenes, prefabs and similar), do not edit those files: ask the owner with ask_teammate first.",
     { task_id: z.string().uuid().describe("A task id from get_context") },
     async ({ task_id }) => {
       const userId = await currentUserId();
@@ -529,20 +540,26 @@ export function createServer(
           .eq("id", task_id)
           .eq("team_id", teamId)
           .is("owner_id", null)
-          .select("id, title, status, files")
+          .select("id, title, status, files, area")
           .maybeSingle(),
       );
       if (claimed) {
         // Remember which chat took the task, so another chat of the same person claiming it can be warned.
         unwrap(await supabase.from("agent_sessions").update({ task_id }).eq("id", sessionId));
         const overlapping = await overlappingTasks(userId, claimed.files);
-        return { claimed: true, task: claimed, ...(overlapping.length > 0 && { overlapping_tasks: overlapping }) };
+        const unmergeable = overlapping.some((task) => task.unmergeable_files);
+        return {
+          claimed: true,
+          task: claimed,
+          ...(overlapping.length > 0 && { overlapping_tasks: overlapping }),
+          ...(unmergeable && { warning: UNMERGEABLE_WARNING }),
+        };
       }
 
       const existing = unwrap(
         await supabase
           .from("tasks")
-          .select("id, title, status, files, owner_id, members(display_name)")
+          .select("id, title, status, files, area, owner_id, members(display_name)")
           .eq("id", task_id)
           .eq("team_id", teamId)
           .maybeSingle(),
@@ -585,15 +602,16 @@ export function createServer(
     "Add a task to the team board so an agent can claim it. Use it when work should be split up or tracked for the team. Never include secrets.",
     {
       title: z.string().min(1).describe("What needs doing, clear enough for a teammate's agent"),
-      files: z.array(z.string()).optional().describe("Files the task is likely to touch"),
+      files: z.array(z.string()).optional().describe("Files the task is likely to touch. List Unity scenes and prefabs here so claim_task can warn about them"),
+      area: z.enum(TASK_AREAS).optional().describe("Which kind of work this is, so the board and map can filter by it"),
     },
-    async ({ title, files = [] }) => {
+    async ({ title, files = [], area }) => {
       await currentUserId();
       const task = unwrapRequired(
         await supabase
           .from("tasks")
-          .insert({ team_id: teamId, title: redact(title), files: files.map(redact) })
-          .select("id, title, status, files")
+          .insert({ team_id: teamId, title: redact(title), files: files.map(redact), ...(area && { area }) })
+          .select("id, title, status, files, area")
           .single(),
       );
       return { created: true, task };

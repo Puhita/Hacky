@@ -41,7 +41,9 @@ export type InboxQuestion = {
 export type FeedItem = { id: string; summary: string; files: string[]; created_at: string; author: string };
 export type PendingAssumption = { id: string; text: string; created_at: string; question: string; author: string };
 export type ActiveDecision = { id: string; text: string; created_at: string; question: string | null; author: string };
-export type BoardTask = { id: string; title: string; status: string; files: string[]; owner: string | null };
+export const TASK_AREAS = ["art", "code", "design", "audio"] as const;
+export type TaskArea = (typeof TASK_AREAS)[number];
+export type BoardTask = { id: string; title: string; status: string; files: string[]; area: TaskArea | null; owner: string | null };
 // A question between two people's agents, seen from the signed-in person.
 export type PeerThread = {
   id: string;
@@ -64,7 +66,7 @@ export type PulseMember = {
 };
 
 // What the Hacky Map draws: the people on a team, their agent chats, and the questions open between them.
-export type MapTask = { id: string; title: string; status: "todo" | "in_progress" | "done"; files: string[] };
+export type MapTask = { id: string; title: string; status: "todo" | "in_progress" | "done"; files: string[]; area: TaskArea | null };
 export type MapOwner = {
   id: string;
   name: string;
@@ -399,7 +401,7 @@ export class HackyApi {
     const rows = unwrap(
       await this.supabase
         .from("tasks")
-        .select("id, title, status, files, members(display_name)")
+        .select("id, title, status, files, area, members(display_name)")
         .eq("team_id", teamId)
         .order("created_at", { ascending: true })
         .limit(TASK_LIMIT),
@@ -407,8 +409,9 @@ export class HackyApi {
     return rows.map(({ members, ...row }) => ({ ...row, owner: members?.display_name ?? null }));
   }
 
-  async addTask(teamId: string, title: string): Promise<void> {
-    unwrap(await this.supabase.from("tasks").insert({ team_id: teamId, title: redact(title) }));
+  async addTask(teamId: string, title: string, area?: TaskArea): Promise<void> {
+    if (area !== undefined && !TASK_AREAS.includes(area)) throw new Error(`Unknown area: ${area}`);
+    unwrap(await this.supabase.from("tasks").insert({ team_id: teamId, title: redact(title), ...(area && { area }) }));
   }
 
   private async memberNames(teamId: string): Promise<Map<string, string>> {
@@ -509,7 +512,7 @@ export class HackyApi {
         .then(unwrap),
       this.supabase
         .from("tasks")
-        .select("id, title, status, owner_id, files, created_at, updated_at")
+        .select("id, title, status, owner_id, files, area, created_at, updated_at")
         .eq("team_id", teamId)
         .limit(TASK_LIMIT)
         .then(unwrap),
@@ -644,11 +647,12 @@ export class HackyApi {
     }
     threads.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-    const mapTask = (task: { id: string; title: string; status: MapTask["status"]; files: string[] | null }): MapTask => ({
+    const mapTask = (task: { id: string; title: string; status: MapTask["status"]; files: string[] | null; area: TaskArea | null }): MapTask => ({
       id: task.id,
       title: label(task.title),
       status: task.status,
       files: task.files ?? [],
+      area: task.area ?? null,
     });
     const newestFirst = (a: { created_at: string }, b: { created_at: string }) => b.created_at.localeCompare(a.created_at);
     const owners: MapOwner[] = [...names].map(([id, name]) => {
