@@ -436,6 +436,90 @@ test("claim_task warns about a teammate working on the same files", async () => 
   assert.equal((await call(carolAgent, "claim_task", { task_id: noFiles.id })).overlapping_tasks, undefined);
 });
 
+test("claim_task warns loudly when a teammate holds the same Unity scene or prefab", async () => {
+  const { bobAgent, carolAgent } = await newTeam();
+  const { task: bobTask } = await call(bobAgent, "create_task", { title: "Level 1", files: ["Assets/Scenes/Level1.UNITY", "Assets/Scripts/Player.cs", "Assets/Prefabs/Hero.prefab"] });
+  await call(bobAgent, "claim_task", { task_id: bobTask.id });
+
+  const { task: scene } = await call(carolAgent, "create_task", { title: "Lighting", files: ["Assets/Scenes/Level1.UNITY", "Assets/Prefabs/Hero.prefab", "Assets/Scripts/Player.cs"] });
+  const claimed = await call(carolAgent, "claim_task", { task_id: scene.id });
+  assert.equal(claimed.claimed, true);
+  assert.match(claimed.warning, /can't be merged/);
+  assert.deepEqual(claimed.overlapping_tasks[0].unmergeable_files, ["Assets/Scenes/Level1.UNITY", "Assets/Prefabs/Hero.prefab"], "extensions match in any case, code files are not listed");
+  assert.deepEqual(claimed.overlapping_tasks[0].shared_files.length, 3);
+});
+
+test("claim_task adds no Unity warning for shared code, or for a Unity file nobody else holds", async () => {
+  const { bobAgent, carolAgent } = await newTeam();
+  const { task: bobTask } = await call(bobAgent, "create_task", { title: "Player", files: ["Assets/Scripts/Player.cs"] });
+  await call(bobAgent, "claim_task", { task_id: bobTask.id });
+  const { task: code } = await call(carolAgent, "create_task", { title: "Player fix", files: ["Assets/Scripts/Player.cs"] });
+  const shared = await call(carolAgent, "claim_task", { task_id: code.id });
+  assert.equal(shared.warning, undefined);
+  assert.equal(shared.overlapping_tasks[0].unmergeable_files, undefined);
+
+  const { task: ownScene } = await call(carolAgent, "create_task", { title: "Menu", files: ["Assets/Scenes/Menu.unity"] });
+  const alone = await call(carolAgent, "claim_task", { task_id: ownScene.id });
+  assert.equal(alone.warning, undefined);
+  assert.equal(alone.overlapping_tasks, undefined);
+});
+
+test("tasks carry an optional area, and an unknown area is rejected", async () => {
+  const { bobAgent } = await newTeam();
+  const { task } = await call(bobAgent, "create_task", { title: "Hero sprite", area: "art" });
+  assert.equal(task.area, "art");
+  const claimed = await call(bobAgent, "claim_task", { task_id: task.id });
+  assert.equal(claimed.task.area, "art");
+  const { task: plain } = await call(bobAgent, "create_task", { title: "Anything" });
+  assert.equal(plain.area, null);
+  const context = await call(bobAgent, "get_context");
+  assert.equal(context.my_tasks.find((mine: any) => mine.id === task.id).area, "art");
+  const odd = await bobAgent.callTool({ name: "create_task", arguments: { title: "Odd", area: "cooking" } });
+  assert.equal(odd.isError, true);
+});
+
+test("get_context shows a capped overview, get_overview shows all of it, and agents have no tool to edit it", async () => {
+  const { teamId, bobAgent } = await newTeam();
+  const empty = await call(bobAgent, "get_context");
+  assert.equal(empty.project_overview, null);
+  assert.equal((await call(bobAgent, "get_overview")).idea, "");
+
+  const longArchitecture = "Layers. ".repeat(500);
+  const { error } = await admin.from("team_overview").insert({ team_id: teamId, idea: "A shared brain for agents", architecture: longArchitecture, updated_by: lead.userId });
+  assert.ifError(error);
+  const context = await call(bobAgent, "get_context");
+  assert.equal(context.project_overview.idea, "A shared brain for agents");
+  assert.equal(context.project_overview.truncated, true);
+  assert.ok(context.project_overview.architecture.length < 2100 && context.project_overview.architecture.includes("get_overview"));
+  assert.equal((await call(bobAgent, "get_overview")).architecture, longArchitecture);
+
+  const tools = (await bobAgent.listTools()).tools.map((tool) => tool.name);
+  for (const name of ["get_overview", "report_bug", "add_idea"]) assert.ok(tools.includes(name), name);
+  assert.ok(!tools.some((name) => /overview/.test(name) && name !== "get_overview"), "no tool writes the overview");
+});
+
+test("report_bug and add_idea file items on the project page, and remove secrets first", async () => {
+  const { teamId, bobAgent } = await newTeam();
+  const secret = "sb_secret_abcdefghijklmnop123456";
+  const bug = await call(bobAgent, "report_bug", { title: `Login fails with ${secret}`, details: `API_KEY=${secret}`, severity: "high" });
+  assert.equal(bug.item.kind, "bug");
+  assert.equal(bug.item.severity, "high");
+  const idea = await call(bobAgent, "add_idea", { title: "Dark mode", details: "Because" });
+  assert.equal(idea.item.kind, "idea");
+  assert.equal(idea.item.severity, null);
+
+  const { data } = await admin.from("project_items").select("kind, title, details, author_id, status").eq("team_id", teamId).order("created_at");
+  assert.ok(!JSON.stringify(data).includes(secret));
+  assert.deepEqual(data!.map((row) => row.kind), ["bug", "idea"]);
+  assert.ok(data!.every((row) => row.author_id === bob.userId && row.status === "open"));
+
+  const context = await call(bobAgent, "get_context");
+  assert.equal(context.open_bugs, 1);
+  assert.equal(context.open_ideas, 1);
+  const odd = await bobAgent.callTool({ name: "report_bug", arguments: { title: "x", severity: "catastrophic" } });
+  assert.equal(odd.isError, true);
+});
+
 test("secrets are removed before a question is embedded or stored", async () => {
   const { bobAgent } = await newTeam();
   const secret = "sb_secret_abcdefghijklmnop123456";

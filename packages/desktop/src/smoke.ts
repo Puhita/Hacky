@@ -4,17 +4,19 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WebContentsView } from "electron";
 import type { PageName, Tab } from "./host.js";
+import type { Terminals } from "./terminals.js";
 
 type Context = {
   dir: string;
   views: Record<PageName, WebContentsView>;
   showTab: (tab: Tab) => void;
+  terminals: Terminals;
   quit: () => void;
 };
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export async function runSmoke({ dir, views, showTab, quit }: Context): Promise<void> {
+export async function runSmoke({ dir, views, showTab, terminals, quit }: Context): Promise<void> {
   mkdirSync(dir, { recursive: true });
   const problems: string[] = [];
   for (const name of Object.keys(views) as PageName[]) {
@@ -42,6 +44,23 @@ export async function runSmoke({ dir, views, showTab, quit }: Context): Promise<
   report.mapTabOpened = views.map.getVisible() && !views.board.getVisible();
   await shoot("tabs-map", "tabs");
   await shoot("map", "map");
+  showTab("skills");
+  await wait(500);
+  await shoot("skills", "skills");
+  showTab("git");
+  await wait(3000);
+  await shoot("git", "git");
+  // A real terminal: open a shell from the screen's own button, type into it, and read it back.
+  showTab("terminal");
+  await wait(1000);
+  await views.terminal.webContents.executeJavaScript("document.querySelector('[data-kind=\"shell\"]').click()");
+  await wait(2500);
+  const id = terminals.firstId();
+  if (id !== undefined) terminals.input(id, "echo smoke-terminal-ok\r");
+  await wait(2000);
+  await shoot("terminal", "terminal");
+  report.terminalWorked = String((report.terminal as { text: string }).text).includes("smoke-terminal-ok");
+  terminals.closeAll();
   report.problems = problems;
   writeFileSync(join(dir, "report.json"), JSON.stringify(report, null, 2));
   quit();

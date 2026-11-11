@@ -1,0 +1,49 @@
+/* Hacky Skills. Everything derives from --vscode-* variables, so any light, dark or
+   high-contrast theme works. */
+html, body { min-height: 100%; }
+body { margin: 0; padding: 0; font: var(--vscode-font-size, 13px)/1.45 var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
+
+#root.hk {
+  --bg: var(--vscode-editor-background);
+  --fg: var(--vscode-foreground);
+  --dim: var(--vscode-descriptionForeground);
+  --line: var(--vscode-widget-border, var(--vscode-panel-border, rgba(128, 128, 128, 0.3)));
+  --card: color-mix(in srgb, var(--fg) 4%, var(--bg));
+  --brand: var(--vscode-textLink-foreground);
+  --hover: var(--vscode-list-hoverBackground);
+  --warn: color-mix(in srgb, var(--vscode-charts-orange, #d18616) 78%, var(--fg));
+  --ok: color-mix(in srgb, var(--vscode-charts-green, #89d185) 78%, var(--fg));
+  --err: var(--vscode-errorForeground, #f14c4c);
+  min-height: 100vh;
+  color: var(--fg);
+  background: var(--bg);
+}
+.hk *, .hk *::before, .hk *::after { box-sizing: border-box; }
+.hk .page { max-width: 760px; margin: 0 auto; padding: 20px 16px 40px; display: flex; flex-direction: column; gap: 14px; }
+.hk h1 { font-size: 18px; margin: 0; }
+.hk h2 { font-size: 14px; margin: 0 0 6px; }
+.hk p { margin: 0; }
+.hk .hint { color: var(--dim); font-size: 12px; }
+.hk .tr { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.hk .grow { flex: 1; min-width: 0; }
+.hk .msg { padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; }
+.hk .msg.err { border-color: var(--err); }
+.hk .msg.ok { border-color: var(--ok); }
+.hk .lookup { display: flex; gap: 8px; }
+.hk input[type="url"] { flex: 1; min-width: 0; padding: 6px 8px; color: var(--fg); background: var(--vscode-input-background, var(--card)); border: 1px solid var(--vscode-input-border, var(--line)); border-radius: 4px; font: inherit; }
+.hk .card { border: 1px solid var(--line); border-radius: 8px; background: var(--card); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.hk .row { display: flex; align-items: center; gap: 8px; }
+.hk .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hk .btn { padding: 5px 12px; color: var(--fg); background: transparent; border: 1px solid var(--line); border-radius: 4px; font: inherit; cursor: pointer; }
+.hk .btn:hover { background: var(--hover); }
+.hk .btn.pri { color: var(--vscode-button-foreground, #fff); background: var(--vscode-button-background, var(--brand)); border-color: transparent; }
+.hk .btn[disabled] { opacity: 0.5; cursor: default; }
+.hk .lnk { padding: 0; color: var(--brand); background: none; border: 0; font: inherit; cursor: pointer; }
+.hk .warn { color: var(--dim); border-left: 3px solid var(--warn); padding-left: 8px; font-size: 12px; }
+.hk .warn.strong { color: var(--fg); }
+.hk .skill-text { margin: 0; padding: 10px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font: 12px/1.5 var(--vscode-editor-font-family, monospace); }
+.hk .files { margin: 6px 0 0; padding-left: 18px; font: 12px/1.5 var(--vscode-editor-font-family, monospace); }
+.hk .share { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.hk .badge { font-size: 11px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 10px; color: var(--dim); white-space: nowrap; }
+.hk .badge.current { border-color: var(--ok); }
+.hk .badge.outdated { border-color: var(--warn); }

@@ -2,7 +2,7 @@
 (function () {
   const host = acquireVsCodeApi();
   const bar = document.getElementById("bar");
-  const tabs = [["board", "Board"], ["map", "Map"]];
+  const tabs = [["board", "Board"], ["map", "Map"], ["skills", "Skills"], ["git", "Git"], ["terminal", "Terminal"]];
   const buttons = tabs.map(function (tab) {
     const button = document.createElement("button");
     button.type = "button";

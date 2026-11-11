@@ -6,7 +6,7 @@ import { redact } from "hacky-mcp-server/redact";
 const FEED_LIMIT = 30;
 const DECISION_LIMIT = 50;
 const TASK_LIMIT = 200;
-const LIVE_TABLES = ["events", "questions", "question_waiters", "decisions", "tasks", "assumptions", "agent_sessions", "peer_questions"];
+const LIVE_TABLES = ["file_touches", "team_overview", "project_items", "events", "questions", "question_waiters", "decisions", "tasks", "assumptions", "agent_sessions", "peer_questions"];
 const PEER_THREAD_LIMIT = 20;
 // Matches the MCP server: a chat that hasn't touched Hacky for this long counts as idle.
 const ACTIVE_WINDOW_MS = 10 * 60_000;
@@ -41,7 +41,33 @@ export type InboxQuestion = {
 export type FeedItem = { id: string; summary: string; files: string[]; created_at: string; author: string };
 export type PendingAssumption = { id: string; text: string; created_at: string; question: string; author: string };
 export type ActiveDecision = { id: string; text: string; created_at: string; question: string | null; author: string };
-export type BoardTask = { id: string; title: string; status: string; files: string[]; owner: string | null };
+export const TASK_AREAS = ["art", "code", "design", "audio"] as const;
+export type TaskArea = (typeof TASK_AREAS)[number];
+export type BoardTask = { id: string; title: string; status: string; files: string[]; area: TaskArea | null; owner: string | null };
+// A file one person's agents edited recently, as reported by the Claude Code hook.
+export type FileTouch = { path: string; person: string; touches: number; lastAt: string };
+export const FILE_TOUCH_DAYS = 7;
+// The project page: the team's shared overview, and the ideas and bugs people and agents filed.
+export const PROJECT_ITEM_KINDS = ["idea", "bug"] as const;
+export const BUG_SEVERITIES = ["low", "medium", "high"] as const;
+export type ProjectItemKind = (typeof PROJECT_ITEM_KINDS)[number];
+export type BugSeverity = (typeof BUG_SEVERITIES)[number];
+export type ProjectItemStatus = "open" | "done" | "dropped";
+export type ProjectOverview = { idea: string; architecture: string; updatedBy: string | null; updatedAt: string | null };
+export type ProjectItem = {
+  id: string;
+  kind: ProjectItemKind;
+  title: string;
+  details: string;
+  severity: BugSeverity | null;
+  status: ProjectItemStatus;
+  author: string | null;
+  taskId: string | null;
+  createdAt: string;
+};
+export type ProjectState = { overview: ProjectOverview; items: ProjectItem[] };
+// A skill the team shares: where it comes from on GitHub, pinned to one commit.
+export type TeamSkill = { id: string; name: string; repo: string; path: string; sha: string; addedBy: string | null };
 // A question between two people's agents, seen from the signed-in person.
 export type PeerThread = {
   id: string;
@@ -64,7 +90,7 @@ export type PulseMember = {
 };
 
 // What the Hacky Map draws: the people on a team, their agent chats, and the questions open between them.
-export type MapTask = { id: string; title: string; status: "todo" | "in_progress" | "done"; files: string[] };
+export type MapTask = { id: string; title: string; status: "todo" | "in_progress" | "done"; files: string[]; area: TaskArea | null };
 export type MapOwner = {
   id: string;
   name: string;
@@ -183,7 +209,7 @@ export class HackyApi {
     const user = await this.currentUser();
     if (!user) return [];
     const rows = unwrap(
-      await this.supabase.from("members").select("role, teams(id, name, invite_code)").eq("user_id", user.id),
+      await this.supabase.from("members").select("role, teams!members_team_id_fkey(id, name, invite_code)").eq("user_id", user.id),
     ) as unknown as { role: string; teams: Omit<Team, "role" | "members"> }[];
     // A person can see every member of their own groups, so one query counts them all.
     const sizes = new Map<string, number>();
@@ -220,6 +246,31 @@ export class HackyApi {
 
   async setMemberRole(teamId: string, userId: string, role: TeamMember["role"]): Promise<void> {
     unwrap(await this.supabase.rpc("set_member_role", { target_team: teamId, target_user: userId, new_role: role }));
+  }
+
+  async teamSkills(teamId: string): Promise<TeamSkill[]> {
+    const rows = unwrap(
+      await this.supabase.from("team_skills").select("id, name, repo, path, sha, added_by").eq("team_id", teamId).order("name", { ascending: true }),
+    );
+    const names = await this.memberNames(teamId);
+    return rows.map((row) => ({ id: row.id, name: row.name, repo: row.repo, path: row.path, sha: row.sha, addedBy: names.get(row.added_by) ?? null }));
+  }
+
+  // Adds a skill to the team's list, or moves one with the same name to a newer commit.
+  async shareSkill(teamId: string, skill: { name: string; repo: string; path: string; sha: string }): Promise<void> {
+    const existing = unwrap(await this.supabase.from("team_skills").select("id, repo, path").eq("team_id", teamId).eq("name", skill.name));
+    if (existing.length > 0) {
+      if (existing[0].repo !== skill.repo || existing[0].path !== skill.path) {
+        throw new Error(`The team already shares a different skill called ${skill.name}. Remove it from the list first.`);
+      }
+      unwrap(await this.supabase.from("team_skills").update({ sha: skill.sha }).eq("id", existing[0].id));
+    } else {
+      unwrap(await this.supabase.from("team_skills").insert({ team_id: teamId, ...skill }));
+    }
+  }
+
+  async unshareSkill(skillId: string): Promise<void> {
+    unwrap(await this.supabase.from("team_skills").delete().eq("id", skillId));
   }
 
   async removeMember(teamId: string, userId: string): Promise<void> {
@@ -399,7 +450,7 @@ export class HackyApi {
     const rows = unwrap(
       await this.supabase
         .from("tasks")
-        .select("id, title, status, files, members(display_name)")
+        .select("id, title, status, files, area, members(display_name)")
         .eq("team_id", teamId)
         .order("created_at", { ascending: true })
         .limit(TASK_LIMIT),
@@ -407,8 +458,87 @@ export class HackyApi {
     return rows.map(({ members, ...row }) => ({ ...row, owner: members?.display_name ?? null }));
   }
 
-  async addTask(teamId: string, title: string): Promise<void> {
-    unwrap(await this.supabase.from("tasks").insert({ team_id: teamId, title: redact(title) }));
+  // Files teammates' agents edited in the last week. Older databases without the table show none.
+  async fileTouches(teamId: string): Promise<FileTouch[]> {
+    const since = new Date(Date.now() - FILE_TOUCH_DAYS * 86_400_000).toISOString();
+    const result = await this.supabase
+      .from("file_touches")
+      .select("user_id, path, touches, last_at")
+      .eq("team_id", teamId)
+      .gte("last_at", since)
+      .order("last_at", { ascending: false })
+      .limit(1000);
+    if (result.error?.code === "PGRST205") return [];
+    const [rows, names] = [unwrap(result), await this.memberNames(teamId)];
+    return rows.map((row) => ({ path: row.path, person: names.get(row.user_id) ?? "A teammate", touches: row.touches, lastAt: row.last_at }));
+  }
+
+  async projectState(teamId: string): Promise<ProjectState> {
+    const [overview, items, names] = await Promise.all([
+      this.supabase.from("team_overview").select("idea, architecture, updated_by, updated_at").eq("team_id", teamId).maybeSingle().then(unwrap),
+      this.supabase
+        .from("project_items")
+        .select("id, kind, title, details, severity, status, author_id, task_id, created_at")
+        .eq("team_id", teamId)
+        .order("created_at", { ascending: false })
+        .limit(TASK_LIMIT)
+        .then(unwrap),
+      this.memberNames(teamId),
+    ]);
+    return {
+      overview: {
+        idea: overview?.idea ?? "",
+        architecture: overview?.architecture ?? "",
+        updatedBy: overview?.updated_by ? (names.get(overview.updated_by) ?? null) : null,
+        updatedAt: overview?.updated_at ?? null,
+      },
+      items: items.map((row) => ({
+        id: row.id,
+        kind: row.kind as ProjectItemKind,
+        title: row.title,
+        details: row.details,
+        severity: (row.severity as BugSeverity | null) ?? null,
+        status: row.status as ProjectItemStatus,
+        author: row.author_id ? (names.get(row.author_id) ?? null) : null,
+        taskId: row.task_id,
+        createdAt: row.created_at,
+      })),
+    };
+  }
+
+  async saveOverview(teamId: string, idea: string, architecture: string): Promise<void> {
+    const user = await this.currentUser();
+    if (!user) throw new Error("Log in first.");
+    unwrap(
+      await this.supabase
+        .from("team_overview")
+        .upsert({ team_id: teamId, idea: redact(idea), architecture: redact(architecture), updated_by: user.id, updated_at: new Date().toISOString() }),
+    );
+  }
+
+  async addProjectItem(teamId: string, kind: ProjectItemKind, title: string, details: string, severity?: BugSeverity): Promise<void> {
+    if (!PROJECT_ITEM_KINDS.includes(kind)) throw new Error(`Unknown kind: ${kind}`);
+    if (severity !== undefined && (kind !== "bug" || !BUG_SEVERITIES.includes(severity))) throw new Error("Only bugs have a severity: low, medium or high.");
+    const user = await this.currentUser();
+    if (!user) throw new Error("Log in first.");
+    unwrap(
+      await this.supabase
+        .from("project_items")
+        .insert({ team_id: teamId, kind, title: redact(title).slice(0, 200), details: redact(details).slice(0, 4000), author_id: user.id, ...(severity && { severity }) }),
+    );
+  }
+
+  async setProjectItemStatus(itemId: string, status: ProjectItemStatus): Promise<void> {
+    unwrap(await this.supabase.from("project_items").update({ status, updated_at: new Date().toISOString() }).eq("id", itemId));
+  }
+
+  async projectItemToTask(itemId: string): Promise<void> {
+    unwrap(await this.supabase.rpc("item_to_task", { target_item: itemId }));
+  }
+
+  async addTask(teamId: string, title: string, area?: TaskArea): Promise<void> {
+    if (area !== undefined && !TASK_AREAS.includes(area)) throw new Error(`Unknown area: ${area}`);
+    unwrap(await this.supabase.from("tasks").insert({ team_id: teamId, title: redact(title), ...(area && { area }) }));
   }
 
   private async memberNames(teamId: string): Promise<Map<string, string>> {
@@ -509,7 +639,7 @@ export class HackyApi {
         .then(unwrap),
       this.supabase
         .from("tasks")
-        .select("id, title, status, owner_id, files, created_at, updated_at")
+        .select("id, title, status, owner_id, files, area, created_at, updated_at")
         .eq("team_id", teamId)
         .limit(TASK_LIMIT)
         .then(unwrap),
@@ -644,11 +774,12 @@ export class HackyApi {
     }
     threads.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 
-    const mapTask = (task: { id: string; title: string; status: MapTask["status"]; files: string[] | null }): MapTask => ({
+    const mapTask = (task: { id: string; title: string; status: MapTask["status"]; files: string[] | null; area: TaskArea | null }): MapTask => ({
       id: task.id,
       title: label(task.title),
       status: task.status,
       files: task.files ?? [],
+      area: task.area ?? null,
     });
     const newestFirst = (a: { created_at: string }, b: { created_at: string }) => b.created_at.localeCompare(a.created_at);
     const owners: MapOwner[] = [...names].map(([id, name]) => {

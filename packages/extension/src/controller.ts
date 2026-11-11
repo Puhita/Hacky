@@ -12,9 +12,18 @@ import type {
   PulseMember,
   Team,
   TeamMember,
+  TeamSkill,
+  TaskArea,
+  FileTouch,
+  ProjectItemKind,
+  ProjectItemStatus,
+  ProjectState,
+  BugSeverity,
 } from "./api.js";
 import { MIN_PASSWORD_LENGTH } from "./api.js";
-import { connectedTeamId, connectWorkspace, managedBlockIsCurrent } from "./setup.js";
+import { readGit, type GitGraph } from "./gitTree.js";
+import { installedSkill, installSkill, lookUpSkill, parseGithubUrl, previewPicked, removeSkill, type Fetch, type SkillLookup } from "./skills.js";
+import { connectedTeamId, connectWorkspace, EDITORS, managedBlockIsCurrent, type Editor } from "./setup.js";
 
 const REFRESH_DEBOUNCE_MS = 300;
 // Realtime can drop silently, so the sidebar also refreshes on a timer.
@@ -24,7 +33,29 @@ const DIGEST_CHECK_MS = 60_000;
 const PULSE_WINDOW_MS = 60 * 60_000;
 
 // outdated: connected to this team, but the Hacky block in CLAUDE.md is from an older version.
+// How one folder stands against a team: not connected, connected to another team, outdated or current.
+export function folderStatus(dir: string | null, teamId: string | undefined): WorkspaceStatus {
+  if (!dir) return "none";
+  const connected = connectedTeamId(dir);
+  if (!connected) return "not_connected";
+  if (connected !== teamId) return "other_team";
+  return managedBlockIsCurrent(dir) ? "connected" : "outdated";
+}
+
 export type WorkspaceStatus = "none" | "not_connected" | "connected" | "outdated" | "other_team";
+
+// How a team skill stands in this person's active folder.
+export type SkillLocal = "none" | "current" | "outdated" | "manual";
+export type SkillsState = {
+  team: (TeamSkill & { local: SkillLocal })[];
+  // What the person is looking at before installing: a list to choose from, or one skill's preview.
+  lookup: SkillLookup | null;
+  // True when the preview is a teammate's skill, which is already on the team list.
+  fromTeam: boolean;
+};
+
+// The Git screen's data. It is read when the screen asks, not on every refresh, because running git is slow.
+export type GitState = { status: "idle" | "ok" | "error"; error: string | null; graph: GitGraph | null; loadedAt: number | null };
 
 export type SidebarState = {
   // displayName is the name teammates see: the one given when joining or creating a group, or changed in the profile.
@@ -38,9 +69,15 @@ export type SidebarState = {
   assumptions: PendingAssumption[];
   decisions: ActiveDecision[];
   tasks: BoardTask[];
+  // The project page: shared overview, ideas and bugs.
+  project: ProjectState;
+  // Files agents reported editing in the last week.
+  fileTouches: FileTouch[];
   feed: FeedItem[];
   pulse: PulseMember[];
   agentChat: PeerThread[];
+  skills: SkillsState;
+  git: GitState;
   // What the Hacky Map draws. Empty until the first refresh for a team.
   map: MapState;
   notice: string | null;
@@ -55,13 +92,17 @@ export type Message =
   | { type: "createTeam"; name: string; displayName: string }
   | { type: "joinTeam"; code: string; displayName: string }
   | { type: "selectTeam"; teamId: string }
-  | { type: "connectWorkspace" }
+  | { type: "connectWorkspace"; editors?: Editor[] }
   | { type: "answer"; questionId: string; text: string }
   | { type: "confirmAssumption"; assumptionId: string }
   | { type: "rejectAssumption"; assumptionId: string; reason: string }
   | { type: "changeDecision"; decisionId: string; text: string }
   | { type: "withdrawDecision"; decisionId: string }
-  | { type: "addTask"; title: string }
+  | { type: "addTask"; title: string; area?: TaskArea }
+  | { type: "saveOverview"; idea: string; architecture: string }
+  | { type: "addProjectItem"; kind: ProjectItemKind; title: string; details?: string; severity?: BugSeverity }
+  | { type: "setProjectItemStatus"; itemId: string; status: ProjectItemStatus }
+  | { type: "projectItemToTask"; itemId: string }
   | { type: "answerTeammate"; questionId: string; text: string }
   | { type: "renameTeam"; name: string }
   | { type: "deleteTeam" }
@@ -71,8 +112,18 @@ export type Message =
   | { type: "setRole"; userId: string; role: "lead" | "member" }
   | { type: "updateProfile"; displayName: string }
   | { type: "changePassword"; password: string; confirmPassword: string }
+  | { type: "previewSkill"; url: string }
+  | { type: "pickSkill"; path: string }
+  | { type: "previewTeamSkill"; skillId: string }
+  | { type: "installSkill"; share?: boolean }
+  | { type: "cancelSkill" }
+  | { type: "unshareSkill"; skillId: string }
+  | { type: "removeLocalSkill"; name: string }
   | { type: "openMap" }
-  | { type: "openBoard" };
+  | { type: "openBoard" }
+  | { type: "openSkills" }
+  | { type: "openGit" }
+  | { type: "loadGit" };
 
 export type ControllerOptions = {
   api: HackyApi;
@@ -88,10 +139,16 @@ export type ControllerOptions = {
   saveDigestAt?: (at: number) => void;
   // Shows a message outside the sidebar, such as a VS Code notification.
   notify?: (message: string) => void;
+  // Replaces the network call used to look skills up on GitHub. Tests pass a fake.
+  fetch?: Fetch;
   // Opens the Hacky Map in an editor tab.
   openMap?: () => void;
   // Opens the Hacky Board (tasks, messages, team, activity) in an editor tab.
   openBoard?: () => void;
+  // Opens the Skills screen in an editor tab.
+  openSkills?: () => void;
+  // Opens the Git screen in an editor tab.
+  openGit?: () => void;
 };
 
 // Both boxes must agree, and the password must be long enough for the account service to take it.
@@ -123,6 +180,10 @@ export class SidebarController {
   // Teammate questions the person has already been told about. Null until the first look,
   // so questions that were already waiting when the sidebar opened don't each pop up.
   private knownPeerQuestions: Set<string> | null = null;
+  private skillLookup: SkillLookup | null = null;
+  private skillFromTeam = false;
+  private git: GitState = { status: "idle", error: null, graph: null, loadedAt: null };
+  private lastState: SidebarState | null = null;
 
   constructor(private readonly options: ControllerOptions) {
     this.teamId = options.loadTeamId();
@@ -178,7 +239,7 @@ export class SidebarController {
         this.setTeam(message.teamId);
         return;
       case "connectWorkspace":
-        return this.connect();
+        return this.connect(message.editors);
       case "answer":
         await api.answer(message.questionId, message.text.trim());
         this.notice = "Answer sent to the waiting agents.";
@@ -199,9 +260,24 @@ export class SidebarController {
         await api.withdrawDecision(message.decisionId);
         this.notice = "Decision withdrawn. Every agent on the team will be told, and its question is back in the inbox.";
         return;
+      case "saveOverview":
+        if (!this.teamId) throw new Error("Choose a team first.");
+        await api.saveOverview(this.teamId, message.idea, message.architecture);
+        this.notice = "Overview saved. Agents see the start of it when they begin a session.";
+        return;
+      case "addProjectItem":
+        if (!this.teamId) throw new Error("Choose a team first.");
+        if (message.title.trim() === "") throw new Error("Give it a title.");
+        return api.addProjectItem(this.teamId, message.kind, message.title.trim(), (message.details ?? "").trim(), message.severity);
+      case "setProjectItemStatus":
+        return api.setProjectItemStatus(message.itemId, message.status);
+      case "projectItemToTask":
+        await api.projectItemToTask(message.itemId);
+        this.notice = "Added to the board as a task.";
+        return;
       case "addTask":
         if (!this.teamId) throw new Error("Choose a team first.");
-        return api.addTask(this.teamId, message.title.trim());
+        return api.addTask(this.teamId, message.title.trim(), message.area || undefined);
       case "answerTeammate":
         await api.answerPeerQuestion(message.questionId, message.text.trim());
         this.notice = "Answer sent to your teammate's agent.";
@@ -240,12 +316,79 @@ export class SidebarController {
         await api.changePassword(message.password);
         this.notice = "Password changed.";
         return;
+      case "previewSkill": {
+        this.skillFromTeam = false;
+        this.skillLookup = await lookUpSkill(parseGithubUrl(message.url), this.githubFetch());
+        return;
+      }
+      case "pickSkill": {
+        const lookup = this.skillLookup;
+        if (lookup?.kind !== "choose" || !lookup.candidates.some((candidate) => candidate.path === message.path)) throw new Error("Choose one of the listed skills.");
+        this.skillLookup = { kind: "preview", preview: await previewPicked(lookup.repo, lookup.sha, message.path, this.githubFetch()) };
+        return;
+      }
+      case "previewTeamSkill": {
+        const skill = (await api.teamSkills(this.requireTeam())).find((row) => row.id === message.skillId);
+        if (!skill) throw new Error("That skill is no longer on the team list.");
+        this.skillFromTeam = true;
+        this.skillLookup = { kind: "preview", preview: await previewPicked(skill.repo, skill.sha, skill.path, this.githubFetch()) };
+        return;
+      }
+      case "installSkill": {
+        const lookup = this.skillLookup;
+        if (lookup?.kind !== "preview") throw new Error("Look a skill up first.");
+        const dir = this.options.workspaceDir();
+        if (!dir) throw new Error("Choose a folder first.");
+        const { preview } = lookup;
+        await installSkill(dir, preview, this.githubFetch());
+        if (message.share && !this.skillFromTeam) {
+          await api.shareSkill(this.requireTeam(), { name: preview.name, repo: preview.repo, path: preview.path, sha: preview.sha });
+        }
+        this.skillLookup = null;
+        this.notice = `Installed ${preview.name}. Start a new chat in your tool to use it.`;
+        return;
+      }
+      case "cancelSkill":
+        this.skillLookup = null;
+        return;
+      case "unshareSkill":
+        await api.unshareSkill(message.skillId);
+        this.notice = "Removed from the team list. Copies already installed stay where they are.";
+        return;
+      case "removeLocalSkill": {
+        const dir = this.options.workspaceDir();
+        if (!dir) throw new Error("Choose a folder first.");
+        removeSkill(dir, message.name);
+        this.notice = `Removed ${message.name} from this folder.`;
+        return;
+      }
       case "openMap":
         this.options.openMap?.();
         return;
       case "openBoard":
         this.options.openBoard?.();
         return;
+      case "openSkills":
+        this.options.openSkills?.();
+        return;
+      case "openGit":
+        this.options.openGit?.();
+        return;
+      case "loadGit": {
+        const dir = this.options.workspaceDir();
+        if (!dir) {
+          this.git = { status: "error", error: "Choose a project folder first.", graph: null, loadedAt: null };
+          return;
+        }
+        try {
+          this.git = { status: "ok", error: null, graph: await readGit(dir), loadedAt: Date.now() };
+        } catch (error) {
+          this.git = { status: "error", error: (error as Error).message, graph: null, loadedAt: null };
+        }
+        // Show it now, rather than after the full refresh that follows every message.
+        if (this.lastState) this.options.post({ ...this.lastState, git: this.git });
+        return;
+      }
     }
   }
 
@@ -277,16 +420,43 @@ export class SidebarController {
     }
   }
 
-  private connect(): void {
+  private githubFetch(): Fetch {
+    return (
+      this.options.fetch ??
+      ((url) => fetch(url, { headers: { Accept: "application/vnd.github+json", "User-Agent": "hacky-skills" } }) as ReturnType<Fetch>)
+    );
+  }
+
+  // The team's skills, each with how it stands in the active folder.
+  private async skillsState(teamId: string): Promise<SkillsState> {
+    let rows: TeamSkill[] = [];
+    try {
+      rows = await this.options.api.teamSkills(teamId);
+    } catch {
+      // The list is optional; a failure here shouldn't hide the rest of the app.
+    }
+    const dir = this.options.workspaceDir();
+    const team = rows.map((row) => {
+      const found = dir ? installedSkill(dir, row.name) : null;
+      const local: SkillLocal = found === null ? "none" : found === "manual" ? "manual" : found.sha === row.sha ? "current" : "outdated";
+      return { ...row, local };
+    });
+    return { team, lookup: this.skillLookup, fromTeam: this.skillFromTeam };
+  }
+
+  private connect(requested?: Editor[]): void {
     const dir = this.options.workspaceDir();
     if (!dir) throw new Error("Open a folder first.");
     if (!this.teamId) throw new Error("Choose a team first.");
-    connectWorkspace(dir, {
-      supabaseUrl: this.options.supabaseUrl,
-      publishableKey: this.options.publishableKey,
-      teamId: this.teamId,
-    });
-    this.notice = "Workspace connected. Start a new Claude Code session to use Hacky.";
+    // Messages come from a web page, so only known tool names get through.
+    const editors = requested === undefined ? undefined : EDITORS.filter((editor) => requested.includes(editor));
+    connectWorkspace(
+      dir,
+      { supabaseUrl: this.options.supabaseUrl, publishableKey: this.options.publishableKey, teamId: this.teamId },
+      process.platform,
+      editors,
+    );
+    this.notice = "Workspace connected. Start a new chat in your tool to use Hacky.";
   }
 
   private requireTeam(): string {
@@ -301,12 +471,7 @@ export class SidebarController {
   }
 
   private workspaceStatus(team: Team | null): WorkspaceStatus {
-    const dir = this.options.workspaceDir();
-    if (!dir) return "none";
-    const connected = connectedTeamId(dir);
-    if (!connected) return "not_connected";
-    if (connected !== team?.id) return "other_team";
-    return managedBlockIsCurrent(dir) ? "connected" : "outdated";
+    return folderStatus(this.options.workspaceDir(), team?.id);
   }
 
   private syncSubscription(teamId: string | undefined): void {
@@ -335,9 +500,13 @@ export class SidebarController {
       assumptions: [],
       decisions: [],
       tasks: [],
+      project: { overview: { idea: "", architecture: "", updatedBy: null, updatedAt: null }, items: [] },
+      fileTouches: [],
       feed: [],
       pulse: [],
       agentChat: [],
+      skills: { team: [], lookup: null, fromTeam: false },
+      git: this.git,
       map: {
         project: "",
         owners: [],
@@ -374,6 +543,9 @@ export class SidebarController {
               api.mapState(state.team.id),
               api.teamMembers(state.team.id),
             ]);
+          state.project = await api.projectState(state.team.id);
+          state.fileTouches = await api.fileTouches(state.team.id);
+          state.skills = await this.skillsState(state.team.id);
           this.announceTeammateQuestions(state.agentChat);
         }
       }
@@ -381,6 +553,7 @@ export class SidebarController {
     } catch (error) {
       state.error = state.error ?? (error as Error).message;
     }
+    this.lastState = state;
     this.options.post(state);
   }
 }

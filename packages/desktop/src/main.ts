@@ -6,9 +6,10 @@ import { defaultCredentialsFile } from "hacky-mcp-server/credentials";
 import { app, BaseWindow, dialog, ipcMain, Menu, nativeImage, Notification, protocol, Tray, WebContentsView } from "electron";
 import { confirmationUrl, HackyApi } from "../../extension/src/api.js";
 import { attentionCount, statusText } from "../../extension/src/attention.js";
-import { SidebarController, type SidebarState } from "../../extension/src/controller.js";
-import { assetPath, contentType, PAGE_NAMES, pageHtml, parseMessage, type PageName, type Tab } from "./host.js";
+import { folderStatus, SidebarController, type SidebarState } from "../../extension/src/controller.js";
+import { addFolder, assetPath, contentType, PAGE_NAMES, pageHtml, parseMessage, parseTerminalOpen, removeFolder, type PageName, type Tab } from "./host.js";
 import { runSmoke } from "./smoke.js";
+import { Terminals } from "./terminals.js";
 import { installUpdateNow, startUpdates } from "./updater.js";
 
 declare const __SUPABASE_URL__: string;
@@ -19,7 +20,8 @@ const TAB_BAR_HEIGHT = 40;
 const smokeDir = process.env.HACKY_SMOKE_DIR;
 
 // The app's own settings. The sign-in itself is in the shared credentials file.
-type Settings = { teamId?: string; digestAt?: number; folder?: string };
+// "folder" is the one the sidebar acts on; "folders" are all the connected project folders.
+type Settings = { teamId?: string; digestAt?: number; folder?: string; folders?: string[] };
 const settingsFile = () => join(app.getPath("userData"), "settings.json");
 let settings: Settings = {};
 function loadSettings(): void {
@@ -28,6 +30,8 @@ function loadSettings(): void {
   } catch {
     settings = {};
   }
+  // Versions before 0.1.2 kept a single folder.
+  if (settings.folder && !settings.folders?.includes(settings.folder)) settings.folders = addFolder(settings.folders ?? [], settings.folder);
 }
 function saveSettings(change: Partial<Settings>): void {
   settings = { ...settings, ...change };
@@ -49,6 +53,7 @@ let quitting = false;
 const views = {} as Record<PageName, WebContentsView>;
 let api: HackyApi | undefined;
 let controller: SidebarController | undefined;
+let terminals: Terminals | undefined;
 
 const distFile = (path: string) => join(__dirname, path);
 
@@ -68,6 +73,9 @@ function layout(): void {
   const content = { x: side, y: TAB_BAR_HEIGHT, width: width - side, height: height - TAB_BAR_HEIGHT };
   views.board.setBounds(content);
   views.map.setBounds(content);
+  views.skills.setBounds(content);
+  views.git.setBounds(content);
+  views.terminal.setBounds(content);
 }
 
 let activeTab: Tab = "board";
@@ -75,6 +83,9 @@ function showTab(tab: Tab): void {
   activeTab = tab;
   views.board.setVisible(tab === "board");
   views.map.setVisible(tab === "map");
+  views.skills.setVisible(tab === "skills");
+  views.git.setVisible(tab === "git");
+  views.terminal.setVisible(tab === "terminal");
   views.tabs.webContents.send("hacky:state", { activeTab: tab });
 }
 
@@ -144,9 +155,15 @@ function createController(): SidebarController {
     loadTeamId: () => settings.teamId,
     saveTeamId: (teamId) => saveSettings({ teamId }),
     post: (state) => {
-      // The screens also show which folder is chosen.
-      const data = { ...state, folder: settings.folder ? basename(settings.folder) : null };
-      for (const name of ["sidebar", "board", "map"] as const) views[name].webContents.send("hacky:state", data);
+      // The screens also show the connected folders and how each one stands.
+      const folders = (settings.folders ?? []).map((path) => ({
+        path,
+        name: basename(path),
+        status: folderStatus(path, state.team?.id),
+        active: path === settings.folder,
+      }));
+      const data = { ...state, folder: settings.folder ? basename(settings.folder) : null, folders };
+      for (const name of ["sidebar", "board", "map", "skills", "git", "terminal"] as const) views[name].webContents.send("hacky:state", data);
       showAttention(state);
     },
     digestMinutes: () => 30,
@@ -165,13 +182,36 @@ function createController(): SidebarController {
       showTab("board");
       showWindow();
     },
+    openSkills: () => {
+      showTab("skills");
+      showWindow();
+    },
+    openGit: () => {
+      showTab("git");
+      showWindow();
+    },
   });
 }
 
 async function chooseFolder(): Promise<void> {
   const result = await dialog.showOpenDialog({ title: "Choose the project folder to connect", properties: ["openDirectory"] });
   if (result.canceled || !result.filePaths[0]) return;
-  saveSettings({ folder: result.filePaths[0] });
+  saveSettings({ folder: result.filePaths[0], folders: addFolder(settings.folders ?? [], result.filePaths[0]) });
+  await controller?.refresh();
+}
+
+// Acts only on folders the person has already added.
+async function connectFolder(path: string, editors: unknown): Promise<void> {
+  if (!settings.folders?.includes(path)) return;
+  saveSettings({ folder: path });
+  const chosen = Array.isArray(editors) ? editors : undefined;
+  await controller?.handle({ type: "connectWorkspace", editors: chosen });
+}
+
+async function dropFolder(path: string): Promise<void> {
+  if (!settings.folders?.includes(path)) return;
+  const folders = removeFolder(settings.folders, path);
+  saveSettings({ folders, folder: settings.folder === path ? folders[0] : settings.folder });
   await controller?.refresh();
 }
 
@@ -180,6 +220,8 @@ function handleMessage(raw: unknown): void {
   if (!parsed) return;
   if (parsed.kind === "showTab") showTab(parsed.tab);
   else if (parsed.kind === "chooseFolder") void chooseFolder();
+  else if (parsed.kind === "connectFolder") void connectFolder(parsed.path, parsed.editors);
+  else if (parsed.kind === "removeFolder") void dropFolder(parsed.path);
   else {
     // A screen that has just loaded missed which tab is showing.
     if (parsed.message.type === "ready") views.tabs.webContents.send("hacky:state", { activeTab });
@@ -201,6 +243,7 @@ app.on("second-instance", (_event, argv) => {
 });
 app.on("before-quit", () => {
   quitting = true;
+  terminals?.closeAll();
 });
 app.on("will-quit", () => {
   controller?.dispose();
@@ -230,11 +273,50 @@ void app.whenReady().then(() => {
     handleMessage(raw);
   });
 
+  // Terminals. Only the Terminal screen itself may use these: the other screens show text from
+  // teammates and from GitHub, and must never be able to start a process.
+  const fromTerminal = (event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent) =>
+    event.sender === views.terminal?.webContents && event.senderFrame?.url === "app://ui/terminal.html";
+  const sendToTerminal = (channel: string, payload: unknown) => views.terminal.webContents.send(channel, payload);
+  terminals = new Terminals(
+    (id, data) => sendToTerminal("hacky:term:data", { id, data }),
+    (id, code) => sendToTerminal("hacky:term:exit", { id, code }),
+  );
+  const idOf = (raw: unknown) => (typeof raw === "object" && raw !== null && Number.isInteger((raw as { id?: unknown }).id) ? (raw as { id: number }).id : null);
+  ipcMain.handle("hacky:term:open", (event, raw) => {
+    if (!fromTerminal(event)) return { error: "Not allowed." };
+    const request = parseTerminalOpen(raw, settings.folders ?? []);
+    if (!request) return { error: "Choose one of your project folders." };
+    try {
+      return terminals!.open(request.kind, request.folder);
+    } catch (error) {
+      return { error: (error as Error).message };
+    }
+  });
+  ipcMain.on("hacky:term:input", (event, raw) => {
+    const id = idOf(raw);
+    const data = (raw as { data?: unknown } | null)?.data;
+    if (fromTerminal(event) && id !== null && typeof data === "string" && data.length <= 65536) terminals!.input(id, data);
+  });
+  ipcMain.on("hacky:term:resize", (event, raw) => {
+    const id = idOf(raw);
+    const { cols, rows } = (raw ?? {}) as { cols?: unknown; rows?: unknown };
+    if (fromTerminal(event) && id !== null && Number.isInteger(cols) && Number.isInteger(rows)) terminals!.resize(id, cols as number, rows as number);
+  });
+  ipcMain.on("hacky:term:close", (event, raw) => {
+    const id = idOf(raw);
+    if (fromTerminal(event) && id !== null) terminals!.close(id);
+  });
+
   createWindow();
   createTray();
   controller = createController();
   if (linkIn(process.argv)) handleConfirmationLink();
   // Only an installed app updates itself; a test run never does.
   if (app.isPackaged && !smokeDir) startUpdates(onUpdateReady);
-  if (smokeDir) void runSmoke({ dir: smokeDir, views, showTab, quit: () => app.quit() });
+  if (smokeDir) {
+    // A test run has no folders of its own; let the terminal test use the test folder.
+    if (!settings.folders?.length) settings = { ...settings, folders: [smokeDir], folder: smokeDir };
+    void runSmoke({ dir: smokeDir, views, showTab, terminals: terminals!, quit: () => app.quit() });
+  }
 });

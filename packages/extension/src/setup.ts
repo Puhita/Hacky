@@ -1,7 +1,7 @@
-// Connects a workspace to a team: registers the MCP server for Claude Code and tells
-// agents to use it. Existing content in these files is always preserved.
+// Connects a workspace to a team: registers the MCP server for Claude Code, Cursor or Codex and
+// tells agents to use it. Existing content in these files is always preserved.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 export const SERVER_NAME = "hacky";
 const BLOCK_START = "<!-- hacky:start -->";
@@ -27,7 +27,11 @@ You are one of several agents working for a team. The team shares tasks, progres
 - If \`check_answers\` returns a notice, a human rejected an assumption or changed a decision, and it overrides your earlier work. Change what you built on it right away and say what you changed. Do the same if an answer differs from \`your_assumption\`.
 - Do not use \`ask\` for things you can work out from the code, or for ordinary engineering choices.
 - Never put secrets in anything you send to these tools.
+- If this is a Unity project (it has \`Assets/\` and \`ProjectSettings/\`): never edit \`Library/\`, \`Temp/\`, \`Obj/\`, \`Logs/\` or \`UserSettings/\`; keep each \`.meta\` file with its asset when you move, rename or delete it, and never change its \`guid\`; list the \`.unity\`, \`.prefab\` and \`.asset\` files a task touches in \`files\` when you create it, because two people's edits to one can't be merged. If \`claim_task\` returns a warning about \`unmergeable_files\`, don't edit those files until you have agreed with the owner through \`ask_teammate\`.
 ${BLOCK_END}`;
+
+export const EDITORS = ["claude", "cursor", "codex"] as const;
+export type Editor = (typeof EDITORS)[number];
 
 export type ConnectionConfig = { supabaseUrl: string; publishableKey: string; teamId: string };
 
@@ -63,65 +67,164 @@ function withManagedBlock(existing: string): string {
   return existing ? `${existing.trimEnd()}\n\n${MANAGED_BLOCK}\n` : `${MANAGED_BLOCK}\n`;
 }
 
-export function connectWorkspace(dir: string, config: ConnectionConfig, platform: NodeJS.Platform = process.platform) {
-  const mcpFile = join(dir, ".mcp.json");
-  const mcp = readJson(mcpFile);
-
-  const settingsDir = join(dir, ".claude");
-  const settingsFile = join(settingsDir, "settings.local.json");
-  const settings = readJson(settingsFile);
-
-  mcp.mcpServers = {
-    ...mcp.mcpServers,
-    [SERVER_NAME]: {
-      ...launchCommand(platform),
-      env: {
-        HACKY_SUPABASE_URL: config.supabaseUrl,
-        HACKY_SUPABASE_PUBLISHABLE_KEY: config.publishableKey,
-        HACKY_TEAM_ID: config.teamId,
-      },
+function serverEntry(config: ConnectionConfig, platform: NodeJS.Platform) {
+  return {
+    ...launchCommand(platform),
+    env: {
+      HACKY_SUPABASE_URL: config.supabaseUrl,
+      HACKY_SUPABASE_PUBLISHABLE_KEY: config.publishableKey,
+      HACKY_TEAM_ID: config.teamId,
     },
   };
-  writeJson(mcpFile, mcp);
-
-  // Approves this one server and its tools for this user only, so agents aren't stopped
-  // by a prompt on every call. Nothing else is allowed by this.
-  settings.enabledMcpjsonServers = [...new Set([...(settings.enabledMcpjsonServers ?? []), SERVER_NAME])];
-  settings.permissions = {
-    ...settings.permissions,
-    allow: [...new Set([...(settings.permissions?.allow ?? []), `mcp__${SERVER_NAME}`])],
-  };
-  mkdirSync(settingsDir, { recursive: true });
-  writeJson(settingsFile, settings);
-
-  const claudeFile = join(dir, "CLAUDE.md");
-  let existing = "";
-  try {
-    existing = readFileSync(claudeFile, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  writeFileSync(claudeFile, withManagedBlock(existing));
 }
 
-// Whether CLAUDE.md holds this version's Hacky block. An upgrade changes the block, and
-// connecting again is what refreshes it, so this is how the sidebar knows to offer that.
-export function managedBlockIsCurrent(dir: string): boolean {
-  let text: string;
+function readText(file: string): string {
   try {
-    text = readFileSync(join(dir, "CLAUDE.md"), "utf8");
+    return readFileSync(file, "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
     throw error;
   }
-  const start = text.indexOf(BLOCK_START);
-  const end = text.indexOf(BLOCK_END);
-  return start !== -1 && end > start && text.slice(start, end + BLOCK_END.length) === MANAGED_BLOCK;
 }
 
+// Claude Code and Cursor share the same .mcp.json layout.
+function writeMcpJson(file: string, config: ConnectionConfig, platform: NodeJS.Platform) {
+  const mcp = readJson(file);
+  mcp.mcpServers = { ...mcp.mcpServers, [SERVER_NAME]: serverEntry(config, platform) };
+  mkdirSync(dirname(file), { recursive: true });
+  writeJson(file, mcp);
+}
+
+const TOML_START = "# hacky:start";
+const TOML_END = "# hacky:end";
+const toml = (value: string) => JSON.stringify(value);
+
+// Codex reads MCP servers from TOML. Only the marked section is ours.
+function codexSection(config: ConnectionConfig, platform: NodeJS.Platform): string {
+  const { command, args, env } = serverEntry(config, platform);
+  return `${TOML_START}
+[mcp_servers.${SERVER_NAME}]
+command = ${toml(command)}
+args = [${args.map(toml).join(", ")}]
+
+[mcp_servers.${SERVER_NAME}.env]
+${Object.entries(env).map(([key, value]) => `${key} = ${toml(value)}`).join("\n")}
+${TOML_END}`;
+}
+
+function writeCodexConfig(file: string, config: ConnectionConfig, platform: NodeJS.Platform) {
+  const existing = readText(file);
+  const section = codexSection(config, platform);
+  const start = existing.indexOf(TOML_START);
+  const end = existing.indexOf(TOML_END);
+  let next: string;
+  if (start !== -1 && end > start) {
+    next = existing.slice(0, start) + section + existing.slice(end + TOML_END.length);
+  } else {
+    // A second [mcp_servers.hacky] table would make Codex refuse the whole file.
+    if (/^\s*\[mcp_servers\.hacky[\].]/m.test(existing)) {
+      throw new Error(`${file} already defines a hacky server, so Hacky left it alone. Remove that section and try again.`);
+    }
+    next = existing ? `${existing.trimEnd()}\n\n${section}\n` : `${section}\n`;
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, next);
+}
+
+const CURSOR_RULE_HEADER = "---\ndescription: Team coordination with Hacky\nalwaysApply: true\n---\n\n";
+
+function writeBlockFile(file: string, header = "") {
+  const existing = readText(file);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, existing ? withManagedBlock(existing) : `${header}${MANAGED_BLOCK}\n`);
+}
+
+// The Claude Code hook that reports which files the agent edits, so the board can show who is
+// touching what. It only sends paths, and never stops an edit.
+export const TOUCH_HOOK_COMMAND = "npx -y hacky-mcp-server touch";
+const TOUCH_HOOK_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
+
+type HookGroup = { matcher?: string; hooks?: { type?: string; command?: string }[] };
+
+// Adds the hook to the settings once, next to any hooks the person already has.
+export function withTouchHook(settings: Record<string, any>): Record<string, any> {
+  const groups: HookGroup[] = settings.hooks?.PostToolUse ?? [];
+  const present = groups.some((group) => group.hooks?.some((hook) => hook.command?.includes("hacky-mcp-server touch")));
+  if (present) return settings;
+  const group = { matcher: TOUCH_HOOK_MATCHER, hooks: [{ type: "command", command: TOUCH_HOOK_COMMAND, timeout: 15 }] };
+  return { ...settings, hooks: { ...settings.hooks, PostToolUse: [...groups, group] } };
+}
+
+export function connectWorkspace(
+  dir: string,
+  config: ConnectionConfig,
+  platform: NodeJS.Platform = process.platform,
+  editors: readonly Editor[] = ["claude"],
+) {
+  if (!editors.length) throw new Error("Choose at least one tool to connect.");
+
+  // Read every file that must be valid JSON first, so a broken one stops the whole connect.
+  const claude = editors.includes("claude");
+  const settingsFile = join(dir, ".claude", "settings.local.json");
+  const settings = claude ? readJson(settingsFile) : {};
+  if (claude) readJson(join(dir, ".mcp.json"));
+  if (editors.includes("cursor")) readJson(join(dir, ".cursor", "mcp.json"));
+
+  if (claude) {
+    writeMcpJson(join(dir, ".mcp.json"), config, platform);
+    // Approves this one server and its tools for this user only, so agents aren't stopped
+    // by a prompt on every call. Nothing else is allowed by this.
+    settings.enabledMcpjsonServers = [...new Set([...(settings.enabledMcpjsonServers ?? []), SERVER_NAME])];
+    settings.permissions = {
+      ...settings.permissions,
+      allow: [...new Set([...(settings.permissions?.allow ?? []), `mcp__${SERVER_NAME}`])],
+    };
+    mkdirSync(dirname(settingsFile), { recursive: true });
+    writeJson(settingsFile, withTouchHook(settings));
+    writeBlockFile(join(dir, "CLAUDE.md"));
+  }
+  if (editors.includes("cursor")) {
+    writeMcpJson(join(dir, ".cursor", "mcp.json"), config, platform);
+    writeBlockFile(join(dir, ".cursor", "rules", "hacky.mdc"), CURSOR_RULE_HEADER);
+  }
+  if (editors.includes("codex")) {
+    writeCodexConfig(join(dir, ".codex", "config.toml"), config, platform);
+    writeBlockFile(join(dir, "AGENTS.md"));
+  }
+}
+
+// The files that hold the Hacky instructions, one per tool.
+const INSTRUCTION_FILES = ["CLAUDE.md", "AGENTS.md", join(".cursor", "rules", "hacky.mdc")];
+
+// Whether every instruction file with a Hacky block holds this version's block, and there is
+// at least one. An upgrade changes the block, and connecting again is what refreshes it, so
+// this is how the sidebar knows to offer that.
+export function managedBlockIsCurrent(dir: string): boolean {
+  let current = false;
+  for (const name of INSTRUCTION_FILES) {
+    const text = readText(join(dir, name));
+    const start = text.indexOf(BLOCK_START);
+    if (start === -1) continue;
+    const end = text.indexOf(BLOCK_END);
+    if (end <= start || text.slice(start, end + BLOCK_END.length) !== MANAGED_BLOCK) return false;
+    current = true;
+  }
+  return current;
+}
+
+// The team a folder is connected to, from whichever tool's config holds Hacky.
 export function connectedTeamId(dir: string): string | null {
+  for (const file of [join(dir, ".mcp.json"), join(dir, ".cursor", "mcp.json")]) {
+    try {
+      const id = readJson(file).mcpServers?.[SERVER_NAME]?.env?.HACKY_TEAM_ID;
+      if (id) return id;
+    } catch {
+      // A broken file just doesn't count as connected.
+    }
+  }
   try {
-    return readJson(join(dir, ".mcp.json")).mcpServers?.[SERVER_NAME]?.env?.HACKY_TEAM_ID ?? null;
+    const text = readText(join(dir, ".codex", "config.toml"));
+    return /^HACKY_TEAM_ID = "([^"]+)"/m.exec(text)?.[1] ?? null;
   } catch {
     return null;
   }

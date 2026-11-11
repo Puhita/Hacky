@@ -42,6 +42,8 @@ const STATE = {
     { id: "2", title: "Build it", status: "in_progress", files: ["src/a.ts"], owner: "Bob" },
     { id: "3", title: "Ship it", status: "done", files: [], owner: "Alice" },
   ],
+  project: { overview: { idea: "", architecture: "", updatedBy: null, updatedAt: null }, items: [] },
+  fileTouches: [],
   feed: [{ id: "e1", summary: "Fixed average", files: ["src/math.js"], created_at: "2026-11-02T10:00:00Z", author: "Bob" }],
   pulse: [{ name: "Alice", me: true, chats: 1, focus: ["Login form"], updates: 2, latest: ["Finished the API"] }],
   agentChat: [
@@ -70,11 +72,11 @@ test("asks to log in before there is a team to show", () => {
   assert.equal(root.querySelectorAll("button").length, 0);
 });
 
-test("shows four tabs with counts of what needs attention", () => {
+test("shows six tabs with counts of what needs attention", () => {
   const { send, root } = mount();
   send(STATE);
   const tabs = [...root.querySelectorAll('[role="tab"]')].map((node: any) => node.textContent);
-  assert.deepEqual(tabs, ["Tasks2", "Messages3", "Team", "Activity"]);
+  assert.deepEqual(tabs, ["Tasks2", "Messages3", "Team", "Project", "Files", "Activity"]);
 });
 
 test("the Tasks tab groups tasks by status, and adds a task", () => {
@@ -246,4 +248,165 @@ test("the task filter is hidden when the team is one person, and the Add task bu
   send(STATE);
   assert.equal(root.querySelector('[aria-label="Filter tasks by person"]'), null);
   assert.ok(root.querySelector(".addtask .btn.cta svg"));
+});
+
+test("a new task can be given an area, and tasks can be filtered by area", () => {
+  const { sent, send, root, click } = mount();
+  const tasks = [
+    { id: "1", title: "Plan it", status: "todo", files: [], area: "design", owner: null },
+    { id: "2", title: "Build it", status: "in_progress", files: [], area: "code", owner: "Bob" },
+    { id: "3", title: "Ship it", status: "done", files: [], area: null, owner: "Alice" },
+  ];
+  send({ ...STATE, tasks });
+  const areaChips = () => [...root.querySelectorAll('[aria-label="Filter tasks by area"] .chip')].map((node: any) => node.textContent);
+  assert.deepEqual(areaChips(), ["All areas3", "art0", "code1", "design1", "audio0"]);
+  const shown = () => [...root.querySelectorAll(".tc .hl")].map((node: any) => node.textContent);
+  assert.match(root.querySelector(".area-design").textContent, /design/);
+
+  click("code");
+  assert.deepEqual(shown(), ["Build it"]);
+  click("All areas");
+  assert.deepEqual(shown(), ["Plan it", "Build it", "Ship it"]);
+
+  root.querySelector('[name="title"]').value = "Draw hero";
+  root.querySelector('[name="area"]').value = "art";
+  click("Add task");
+  assert.deepEqual(sent[1], { type: "addTask", title: "Draw hero", area: "art" });
+});
+
+test("the area filter is hidden until some task has an area, and it survives a refresh", () => {
+  const { send, root, click } = mount();
+  send(STATE);
+  assert.equal(root.querySelector('[aria-label="Filter tasks by area"]'), null);
+  const tasks = [{ id: "1", title: "Plan it", status: "todo", files: [], area: "audio", owner: null }, { id: "2", title: "Other", status: "todo", files: [], area: "art", owner: null }];
+  send({ ...STATE, tasks });
+  click("audio");
+  send({ ...STATE, tasks });
+  assert.deepEqual([...root.querySelectorAll(".tc .hl")].map((node: any) => node.textContent), ["Plan it"]);
+});
+
+const ITEM = { id: "i1", kind: "bug", title: "Login fails", details: "On Safari only", severity: "high", status: "open", author: "Bob", taskId: null, createdAt: "2026-11-11T08:00:00Z" };
+const PROJECT = {
+  overview: { idea: "A shared brain", architecture: "MCP server plus Supabase", updatedBy: "Alice", updatedAt: "2026-11-11T08:00:00Z" },
+  items: [
+    ITEM,
+    { ...ITEM, id: "i2", kind: "idea", title: "Dark mode", details: "", severity: null, author: null },
+    { ...ITEM, id: "i3", title: "Old bug", status: "done", taskId: "t9" },
+  ],
+};
+
+test("the Project tab shows the overview and the open ideas and bugs, with a badge for open bugs", () => {
+  const { send, root, click } = mount();
+  send({ ...STATE, project: PROJECT });
+  assert.equal([...root.querySelectorAll('[role="tab"]')].find((node: any) => node.textContent.startsWith("Project")).textContent, "Project1");
+  click("Project");
+  assert.equal(root.querySelector("#ov-idea").value, "A shared brain");
+  assert.equal(root.querySelector("#ov-architecture").value, "MCP server plus Supabase");
+  assert.match(root.querySelector(".ov").textContent, /Last edited by Alice/);
+  const titles = [...root.querySelectorAll(".pitem .hl")].map((node: any) => node.textContent);
+  assert.deepEqual(titles, ["Dark mode", "Login fails"], "ideas first, finished items hidden");
+  assert.match(root.querySelector(".sev-high").textContent, /high/);
+  click("Show finished (1)");
+  assert.equal(root.querySelectorAll(".pitem.closed").length, 1);
+  assert.match(root.querySelector(".pitem.closed").textContent, /On the board/);
+});
+
+test("the overview is saved as typed, and unsaved text survives a refresh", () => {
+  const { sent, send, root, click, window } = mount();
+  send({ ...STATE, project: PROJECT });
+  click("Project");
+  root.querySelector("#ov-idea").value = "A shared brain for teams";
+  root.querySelector("#ov-idea").dispatchEvent(new window.Event("input"));
+  send({ ...STATE, project: PROJECT, notice: "x" });
+  assert.equal(root.querySelector("#ov-idea").value, "A shared brain for teams");
+  click("Save overview");
+  assert.deepEqual(sent.at(-1), { type: "saveOverview", idea: "A shared brain for teams", architecture: "MCP server plus Supabase" });
+});
+
+test("ideas and bugs are added, closed and turned into tasks from the Project tab", () => {
+  const { sent, send, root, click } = mount();
+  send({ ...STATE, project: PROJECT });
+  click("Project");
+  click("Add bug");
+  assert.equal(sent.length, 1, "an empty title sends nothing");
+  root.querySelector("#new-bug").value = "Crash on save";
+  root.querySelector("#new-bug-details").value = "Every time";
+  root.querySelector('[name="severity"]').value = "medium";
+  click("Add bug");
+  assert.deepEqual(sent.at(-1), { type: "addProjectItem", kind: "bug", title: "Crash on save", details: "Every time", severity: "medium" });
+  root.querySelector("#new-idea").value = "Export";
+  click("Add idea");
+  assert.deepEqual(sent.at(-1), { type: "addProjectItem", kind: "idea", title: "Export", details: "" });
+
+  const bug = [...root.querySelectorAll(".pitem")].find((node: any) => node.textContent.includes("Login fails")) as any;
+  const press = (text: string) => [...bug.querySelectorAll("button")].find((node: any) => node.textContent === text).click();
+  press("Make task");
+  assert.deepEqual(sent.at(-1), { type: "projectItemToTask", itemId: "i1" });
+  press("Done");
+  assert.deepEqual(sent.at(-1), { type: "setProjectItemStatus", itemId: "i1", status: "done" });
+  press("Drop");
+  assert.deepEqual(sent.at(-1), { type: "setProjectItemStatus", itemId: "i1", status: "dropped" });
+});
+
+test("what teammates and agents filed is shown as text, never as HTML", () => {
+  const { send, root, click } = mount();
+  const evil = '<img src=x onerror="alert(1)">';
+  send({ ...STATE, project: { overview: { idea: evil, architecture: evil, updatedBy: evil, updatedAt: "2026-11-11T08:00:00Z" }, items: [{ ...ITEM, title: evil, details: evil, author: evil }] } });
+  click("Project");
+  assert.equal(root.querySelectorAll("img").length, 0);
+  assert.ok(root.querySelector(".pitem .hl").textContent.includes("<img"));
+});
+
+const NOW_ISO = new Date().toISOString();
+const TOUCHES = [
+  { path: "src/app.ts", person: "Alice", touches: 3, lastAt: NOW_ISO },
+  { path: "src/app.ts", person: "Bob", touches: 1, lastAt: NOW_ISO },
+  { path: "src/ui/panel.ts", person: "Bob", touches: 2, lastAt: NOW_ISO },
+  { path: "README.md", person: "Alice", touches: 1, lastAt: NOW_ISO },
+];
+
+test("the Files tab shows a folder tree of reported edits with who touched each file", () => {
+  const { send, root, click } = mount();
+  send({ ...STATE, fileTouches: TOUCHES });
+  click("Files");
+  const names = () => [...root.querySelectorAll(".frow .fname")].map((node: any) => node.textContent);
+  assert.deepEqual(names(), ["src/", "ui/", "app.ts", "README.md"], "top folders start open, deeper ones closed, folders first");
+  const src = root.querySelector(".frow.folder") as any;
+  assert.equal(src.getAttribute("aria-expanded"), "true");
+  assert.match(src.querySelector(".stack").getAttribute("aria-label"), /Alice/);
+  assert.match(src.querySelector(".stack").getAttribute("aria-label"), /Bob/);
+
+  const ui = [...root.querySelectorAll(".frow.folder")].find((node: any) => node.textContent.includes("ui/")) as any;
+  ui.click();
+  assert.deepEqual(names(), ["src/", "ui/", "panel.ts", "app.ts", "README.md"]);
+  (root.querySelector(".frow.folder") as any).click();
+  assert.deepEqual(names(), ["src/", "README.md"], "a folder folds away");
+  (root.querySelector(".frow.folder") as any).click();
+  const app = [...root.querySelectorAll(".frow.file")].find((node: any) => node.textContent.includes("app.ts")) as any;
+  assert.equal(app.querySelectorAll(".av").length, 2, "one avatar per person");
+  assert.match(app.querySelector(".stack").getAttribute("aria-label"), /Touched by .*Alice/);
+});
+
+test("the Files tab can be narrowed to one person, and explains an empty tree", () => {
+  const { send, root, click } = mount();
+  send({ ...STATE, fileTouches: [] });
+  click("Files");
+  assert.match(root.querySelector(".empty").textContent, /Connect this folder/);
+
+  send({ ...STATE, fileTouches: TOUCHES });
+  const chips = () => [...root.querySelectorAll('[aria-label="Filter files by person"] .chip')].map((node: any) => node.textContent);
+  assert.deepEqual(chips(), ["Everyone4", "Alice2", "Bob2"]);
+  click("Alice");
+  assert.deepEqual([...root.querySelectorAll(".frow .fname")].map((node: any) => node.textContent), ["src/", "app.ts", "README.md"]);
+  click("Bob");
+  assert.deepEqual([...root.querySelectorAll(".frow .fname")].map((node: any) => node.textContent), ["src/", "ui/", "app.ts"]);
+});
+
+test("file names are shown as text, never as HTML", () => {
+  const { send, root, click } = mount();
+  const evil = '<img src=x onerror="alert(1)">';
+  send({ ...STATE, fileTouches: [{ path: `a/${evil}.ts`, person: evil, touches: 1, lastAt: NOW_ISO }] });
+  click("Files");
+  assert.equal(root.querySelectorAll("img").length, 0);
+  assert.ok([...root.querySelectorAll(".fname")].some((node: any) => node.textContent.includes("<img")));
 });

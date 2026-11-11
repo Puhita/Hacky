@@ -11,14 +11,20 @@
   // ---- Remembered choices ----
 
   const saved = vscode.getState() ?? {};
-  const TAB_IDS = ["tasks", "messages", "team", "activity"];
+  const TAB_IDS = ["tasks", "messages", "team", "project", "files", "activity"];
   let tab = TAB_IDS.includes(saved.tab) ? saved.tab : "tasks";
   let messageFilter = saved.messageFilter === "all" ? "all" : "mine";
   let activityFilter = typeof saved.activityFilter === "string" ? saved.activityFilter : "";
   const folds = { ...(saved.folds ?? {}) };
   // "" shows everyone's tasks, otherwise only the tasks of the person with that name.
   let taskFilter = typeof saved.taskFilter === "string" ? saved.taskFilter : "";
-  const persist = () => vscode.setState({ tab, messageFilter, activityFilter, taskFilter, folds });
+  // "" shows every area, otherwise only tasks with that area label.
+  let areaFilter = typeof saved.areaFilter === "string" ? saved.areaFilter : "";
+  // The Project tab hides finished and dropped ideas and bugs until asked.
+  let showClosedItems = saved.showClosedItems === true;
+  // "" shows everyone in the Files tab, otherwise only the files that person touched.
+  let fileFilter = typeof saved.fileFilter === "string" ? saved.fileFilter : "";
+  const persist = () => vscode.setState({ tab, messageFilter, activityFilter, taskFilter, areaFilter, showClosedItems, fileFilter, folds });
 
   const drafts = new Map(); // half-typed text, by field id
   const rejecting = new Set(); // assumption ids whose reject box is open
@@ -191,6 +197,8 @@
 
   // ---- Tasks ----
 
+  const AREAS = ["art", "code", "design", "audio"];
+
   const TASK_COLUMNS = [
     ["todo", "To do", "idle"],
     ["in_progress", "In progress", "work"],
@@ -200,6 +208,7 @@
   function renderTask(task, kind, memberIndex) {
     return el("article", { class: "tc" }, [
       el("div", { class: "tc-top" }, [glyph(kind), el("span", { class: "hl cl2", text: task.title })]),
+      task.area ? el("div", { class: "files" }, [el("span", { class: `area area-${task.area}`, text: task.area })]) : null,
       (task.files ?? []).length > 0 ? el("div", { class: "files" }, task.files.map((file) => el("span", { class: "file tr", text: file }))) : null,
       el("div", { class: "tc-foot" }, [
         task.owner
@@ -211,9 +220,13 @@
 
   function renderTasks(state) {
     const title = el("input", { type: "text", class: "in", id: "new-task", name: "title", "aria-label": "New task", placeholder: "What needs doing?" });
+    const area = el("select", { class: "in", id: "new-task-area", name: "area", "aria-label": "Area" }, [
+      el("option", { value: "", text: "No area" }),
+      ...AREAS.map((name) => el("option", { value: name, text: name })),
+    ]);
     const add = () => {
       if (title.value.trim() === "") return;
-      vscode.postMessage({ type: "addTask", title: title.value });
+      vscode.postMessage({ type: "addTask", title: title.value, ...(area.value && { area: area.value }) });
     };
     title.onkeydown = (event) => event.key === "Enter" && add();
     const names = state.pulse.map((member) => member.name);
@@ -235,10 +248,26 @@
         },
         [document.createTextNode(label), el("span", { class: "chip-n", text: String(total) })],
       );
-    const shown = state.tasks.filter((task) => !taskFilter || task.owner === taskFilter);
+    const areaChip = (value, label) =>
+      el(
+        "button",
+        {
+          type: "button",
+          class: `chip${areaFilter === value ? " on" : ""}`,
+          "aria-pressed": String(areaFilter === value),
+          onclick: () => {
+            areaFilter = value;
+            persist();
+            render(lastState);
+          },
+        },
+        [document.createTextNode(label), el("span", { class: "chip-n", text: String(state.tasks.filter((task) => !value || task.area === value).length) })],
+      );
+    const shown = state.tasks.filter((task) => (!taskFilter || task.owner === taskFilter) && (!areaFilter || task.area === areaFilter));
     return el("div", { class: "bc-in" }, [
       el("div", { class: "addtask" }, [
         el("div", { class: "f1" }, [el("label", { for: "new-task", text: "New task" }), title]),
+        el("div", {}, [el("label", { for: "new-task-area", text: "Area" }), area]),
         button("Add task", "cta", add, "plus"),
       ]),
       names.length > 1
@@ -246,6 +275,9 @@
             chip("", "Everyone", state.tasks.length),
             ...names.map((name) => chip(name, name, countFor(name))),
           ])
+        : null,
+      state.tasks.some((task) => task.area)
+        ? el("div", { class: "chips", role: "group", "aria-label": "Filter tasks by area" }, [areaChip("", "All areas"), ...AREAS.map((name) => areaChip(name, name))])
         : null,
       el(
         "div",
@@ -586,12 +618,199 @@
     ]);
   }
 
+  // ---- Project ----
+
+  const SEVERITIES = ["low", "medium", "high"];
+
+  function renderOverview(state) {
+    const { overview } = state.project;
+    const field = (id, label, saved) => {
+      const area = el("textarea", { "aria-label": label, placeholder: label, rows: "7", id, name: id });
+      area.value = drafts.has(id) ? drafts.get(id) : saved;
+      area.oninput = () => drafts.set(id, area.value);
+      return el("div", { class: "f1" }, [el("label", { for: id, text: label }), area]);
+    };
+    const idea = field("ov-idea", "The idea: what are we building and for whom?", overview.idea);
+    const architecture = field("ov-architecture", "The architecture: how is it put together?", overview.architecture);
+    const save = () => {
+      const message = { type: "saveOverview", idea: idea.querySelector("textarea").value, architecture: architecture.querySelector("textarea").value };
+      drafts.delete("ov-idea");
+      drafts.delete("ov-architecture");
+      vscode.postMessage(message);
+    };
+    return el("section", { class: "ov" }, [
+      el("div", { class: "bar" }, [
+        el("div", {}, [el("h2", { text: "Overview" }), el("div", { class: "sub", text: "Shared by the team. Agents read the start of it each session, but only people can edit it." })]),
+        el("span", { class: "sp" }),
+        overview.updatedAt ? el("span", { class: "muted", text: `Last edited by ${overview.updatedBy ?? "a teammate"}, ${age(overview.updatedAt)} ago` }) : null,
+      ]),
+      el("div", { class: "ov-fields" }, [idea, architecture]),
+      el("div", { class: "row" }, [button("Save overview", "cta", save)]),
+    ]);
+  }
+
+  function renderItem(item) {
+    const closed = item.status !== "open";
+    const post = (message) => () => vscode.postMessage(message);
+    const actions = [
+      item.taskId ? el("span", { class: "muted", text: "On the board" }) : button("Make task", "sec", post({ type: "projectItemToTask", itemId: item.id }), "plus"),
+      closed
+        ? button("Reopen", "sec", post({ type: "setProjectItemStatus", itemId: item.id, status: "open" }))
+        : button("Done", "sec", post({ type: "setProjectItemStatus", itemId: item.id, status: "done" }), "check"),
+      closed ? null : button("Drop", "sec", post({ type: "setProjectItemStatus", itemId: item.id, status: "dropped" }), "close"),
+    ];
+    return el("article", { class: `tc pitem${closed ? " closed" : ""}` }, [
+      el("div", { class: "tc-top" }, [
+        item.severity ? el("span", { class: `sev sev-${item.severity}`, text: item.severity }) : null,
+        el("span", { class: "hl cl2", text: item.title }),
+      ]),
+      item.details ? el("p", { class: "muted pdetails", text: item.details }) : null,
+      el("div", { class: "tc-foot" }, [
+        el("span", { text: `${item.author ?? "A teammate"} \u00b7 ${age(item.createdAt)}${closed ? ` \u00b7 ${item.status}` : ""}` }),
+        el("span", { class: "sp" }),
+        ...actions,
+      ]),
+    ]);
+  }
+
+  function renderItemColumn(state, kind, heading) {
+    const title = el("input", { type: "text", class: "in", id: `new-${kind}`, name: "title", "aria-label": `New ${kind}`, placeholder: kind === "bug" ? "What is wrong?" : "What could we build?" });
+    const details = el("textarea", { class: "in", id: `new-${kind}-details`, name: "details", "aria-label": `${heading} details`, placeholder: "Details (optional)", rows: "2" });
+    const severity = kind === "bug" ? el("select", { class: "in", name: "severity", "aria-label": "Severity" }, [el("option", { value: "", text: "Severity" }), ...SEVERITIES.map((name) => el("option", { value: name, text: name }))]) : null;
+    const add = () => {
+      if (title.value.trim() === "") return;
+      vscode.postMessage({ type: "addProjectItem", kind, title: title.value, details: details.value, ...(severity && severity.value && { severity: severity.value }) });
+    };
+    title.onkeydown = (event) => event.key === "Enter" && add();
+    const all = state.project.items.filter((item) => item.kind === kind);
+    const open = all.filter((item) => item.status === "open");
+    const closed = all.filter((item) => item.status !== "open");
+    return el("section", { class: "col column" }, [
+      el("div", { class: "col-h" }, [el("span", { text: heading }), count(open.length)]),
+      el("div", { class: "pform" }, [title, details, el("div", { class: "row" }, [severity, button(`Add ${kind}`, "cta", add, "plus")])]),
+      ...(open.length === 0 ? [empty(kind === "bug" ? "No open bugs." : "No open ideas.")] : open.map(renderItem)),
+      closed.length > 0
+        ? button(showClosedItems ? "Hide finished" : `Show finished (${closed.length})`, "sec", () => {
+            showClosedItems = !showClosedItems;
+            persist();
+            render(lastState);
+          })
+        : null,
+      ...(showClosedItems ? closed.map(renderItem) : []),
+    ]);
+  }
+
+  function renderProject(state) {
+    return el("div", { class: "bc-in" }, [
+      renderOverview(state),
+      el("div", { class: "kan two" }, [renderItemColumn(state, "idea", "Ideas"), renderItemColumn(state, "bug", "Bugs")]),
+    ]);
+  }
+
+  // ---- Files ----
+
+  const MAX_AVATARS = 4;
+
+  // Folders and files from the reported paths, with who touched what. Folders come first, then by name.
+  function buildTree(touches) {
+    const rootNode = { name: "", path: "", children: new Map(), people: new Map(), lastAt: "" };
+    for (const touch of touches) {
+      let node = rootNode;
+      const parts = touch.path.split("/").filter(Boolean);
+      let path = "";
+      parts.forEach((part, index) => {
+        path = path ? `${path}/${part}` : part;
+        if (!node.children.has(part)) node.children.set(part, { name: part, path, children: new Map(), people: new Map(), lastAt: "", file: index === parts.length - 1 });
+        node = node.children.get(part);
+        const seenAt = node.people.get(touch.person);
+        if (!seenAt || touch.lastAt > seenAt) node.people.set(touch.person, touch.lastAt);
+        if (touch.lastAt > node.lastAt) node.lastAt = touch.lastAt;
+      });
+    }
+    return rootNode;
+  }
+
+  const sortedChildren = (node) => [...node.children.values()].sort((a, b) => Number(Boolean(a.file)) - Number(Boolean(b.file)) || a.name.localeCompare(b.name));
+
+  function renderFiles(state) {
+    const touches = state.fileTouches ?? [];
+    const names = state.pulse.map((member) => member.name);
+    const memberIndex = (name) => Math.max(0, names.indexOf(name));
+    const people = [...new Set(touches.map((touch) => touch.person))].sort();
+    if (fileFilter && !people.includes(fileFilter)) fileFilter = "";
+    const shown = touches.filter((touch) => !fileFilter || touch.person === fileFilter);
+    const chip = (value, label, total) =>
+      el(
+        "button",
+        {
+          type: "button",
+          class: `chip${fileFilter === value ? " on" : ""}`,
+          "aria-pressed": String(fileFilter === value),
+          onclick: () => {
+            fileFilter = value;
+            persist();
+            render(lastState);
+          },
+        },
+        [document.createTextNode(label), el("span", { class: "chip-n", text: String(total) })],
+      );
+    const stack = (node) => {
+      const who = [...node.people.entries()].sort((a, b) => b[1].localeCompare(a[1])).map(([name]) => name);
+      return el("span", { class: "stack", role: "img", "aria-label": `Touched by ${who.join(", ")}`, title: who.join(", ") }, [
+        ...who.slice(0, MAX_AVATARS).map((name) => avatar({ name }, memberIndex(name), "sm")),
+        who.length > MAX_AVATARS ? el("span", { class: "more", text: `+${who.length - MAX_AVATARS}` }) : null,
+      ]);
+    };
+    const rows = [];
+    const walk = (node, depth) => {
+      for (const child of sortedChildren(node)) {
+        if (child.file) {
+          rows.push(el("div", { class: "frow file", "data-depth": String(depth) }, [el("span", { class: "fname", text: child.name }), el("span", { class: "sp" }), stack(child), el("span", { class: "age", text: age(child.lastAt) })]));
+        } else {
+          const key = `f:${child.path}`;
+          const open = isOpen(key, depth < 1);
+          rows.push(
+            el(
+              "button",
+              {
+                type: "button",
+                class: `frow folder${open ? " open" : ""}`,
+                "data-depth": String(depth),
+                "aria-expanded": String(open),
+                onclick: () => {
+                  folds[key] = !open;
+                  persist();
+                  render(lastState);
+                },
+              },
+              [icon("chevron", "chev"), el("span", { class: "fname", text: `${child.name}/` }), el("span", { class: "sp" }), stack(child), el("span", { class: "age", text: age(child.lastAt) })],
+            ),
+          );
+          if (open) walk(child, depth + 1);
+        }
+      }
+    };
+    walk(buildTree(shown), 0);
+    return el("div", { class: "bc-in" }, [
+      el("div", { class: "bar" }, [
+        el("div", {}, [el("h2", { text: "Files" }), el("div", { class: "sub", text: "Files agents edited in the last week, as they reported them. This is not anyone's real folder." })]),
+        el("span", { class: "sp" }),
+        people.length > 1 ? el("div", { class: "chips", role: "group", "aria-label": "Filter files by person" }, [chip("", "Everyone", touches.length), ...people.map((name) => chip(name, name, touches.filter((touch) => touch.person === name).length))]) : null,
+      ]),
+      rows.length === 0
+        ? empty("No edits reported yet. Click Connect this folder in the sidebar to install the hook, then start a new Claude Code chat.")
+        : el("div", { class: "ftree" }, rows),
+    ]);
+  }
+
   // ---- Page ----
 
   const TABS = [
     ["tasks", "Tasks", "board", renderTasks],
     ["messages", "Messages", "inbox", renderMessages],
     ["team", "Team", "team", renderTeam],
+    ["project", "Project", "board", renderProject],
+    ["files", "Files", "board", renderFiles],
     ["activity", "Activity", "activity", renderActivity],
   ];
 
@@ -603,6 +822,10 @@
     if (id === "messages") {
       const need = needCount(state) + state.assumptions.length;
       return need > 0 ? hex("needs", need) : null;
+    }
+    if (id === "project") {
+      const open = (state.project?.items ?? []).filter((item) => item.status === "open" && item.kind === "bug").length;
+      return open > 0 ? hex("needs", open) : null;
     }
     if (id === "team") return liveChats(state) > 0 ? el("i", { class: "pd live" }) : null;
     return null;
