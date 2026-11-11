@@ -1,6 +1,6 @@
 {
   "name": "hacky-desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Hacky for Windows: the sidebar, board and map in their own app, with a tray icon and notifications.",
   "license": "MIT",

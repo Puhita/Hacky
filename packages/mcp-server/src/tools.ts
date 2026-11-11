@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { redact } from "./redact.js";
+
+// What the server reports to clients: always the published package version, read from package.json
+// next to dist/, so it can't drift from it.
+const PACKAGE_VERSION: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
 const MAX_WAIT_SECONDS = 240;
 const POLL_INTERVAL_MS = 3000;
@@ -114,7 +119,7 @@ export function createServer(
   teamId: string,
   { progressReminderMs = DEFAULT_PROGRESS_REMINDER_MS }: ServerOptions = {},
 ): { server: McpServer; endSession: () => Promise<void> } {
-  const server = new McpServer({ name: "hacky", version: "0.1.0" });
+  const server = new McpServer({ name: "hacky", version: PACKAGE_VERSION });
   let verifiedUserId: string | undefined;
 
   // Each server process belongs to one agent chat, so the process is the session. Answers,

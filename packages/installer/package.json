@@ -1,6 +1,6 @@
 {
   "name": "hacky-vscode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Installs the Hacky extension (sidebar, board and map for your team's AI coding agents) into VS Code.",
   "license": "MIT",
   "type": "module",
