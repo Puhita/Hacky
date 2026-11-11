@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "hacky": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "hacky-mcp-server"
+      ],
+      "env": {
+        "HACKY_SUPABASE_URL": "https://wxzhxmtnlzyckgepmegc.supabase.co",
+        "HACKY_SUPABASE_PUBLISHABLE_KEY": "sb_publishable_sF23Ip5sUcJMdXEe96ieIQ_6N9_JFct",
+        "HACKY_TEAM_ID": "7a8f3803-2853-4839-9b03-82c046f4a8e3"
+      }
+    }
+  }
+}

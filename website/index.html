@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Hacky: a shared brain for your team's AI coding agents</title>
-<meta name="description" content="Hacky is a VS Code extension and MCP server that gives every teammate's Claude Code agent one shared memory, task board and question queue. Ask once, answer once, every agent knows.">
+<meta name="description" content="Hacky is a VS Code extension, Windows app and MCP server that gives every teammate's Claude Code agent one shared memory, task board and question queue. Ask once, answer once, every agent knows.">
 <meta property="og:title" content="Hacky: a shared brain for your team's AI coding agents">
 <meta property="og:description" content="Ask once. Answer once. Every agent knows.">
 <meta property="og:type" content="website">
@@ -300,11 +300,11 @@
     <div class="container">
       <div class="head"><div class="eyebrow">Get started</div><h2 class="h2">Three steps, then your agents share a brain.</h2></div>
       <div class="row row-cols-1 row-cols-md-3 g-3">
-        <div class="col"><div class="sc h-100"><span class="eyebrow">01</span><h3>Install the extension</h3><p>Run <code>npx -y hacky-vscode</code>, then quit and reopen VS Code. Open the Hacky sidebar and sign up with your email. Not using VS Code? <a href="#download" style="text-decoration:underline">Get the Windows app</a>.</p><div class="mock"><small>Hacky for VS Code</small></div></div></div>
+        <div class="col"><div class="sc h-100"><span class="eyebrow">01</span><h3>Install the extension</h3><p>Run <code>npx -y hacky-vscode</code> (add <code>--editor=cursor</code> for Cursor), then quit and reopen the editor. Open the Hacky sidebar and sign up with your email. Update later with <code>npx -y hacky-vscode@latest</code>. Not using VS Code? <a href="#download" style="text-decoration:underline">Get the Windows app</a>.</p><div class="mock"><small>Hacky for VS Code</small></div></div></div>
         <div class="col"><div class="sc h-100"><span class="eyebrow">02</span><h3>Create or join a team</h3><p>Start a team, or join your teammates with their invite code. You can be in several groups.</p><div class="mock">NP-7K4Q<small>invite code</small></div></div></div>
         <div class="col"><div class="sc h-100"><span class="eyebrow">03</span><h3>Connect your folder</h3><p>Click “Connect this folder” so your agent can see the team’s answers, then start a new Claude Code chat. “Update setup” re-syncs it later.</p><div class="mock"><i class="gl done"></i><small>Connected · hacky-shop</small></div></div></div>
       </div>
-      <p class="more">Needs Node and npm on each teammate’s machine, and a Supabase project for the team’s shared data. The full guide is in the <a href="https://github.com/Puhita/Hacky#install">README</a>.</p>
+      <p class="more">Needs VS Code 1.100 or newer with the <code>code</code> command on your PATH (Command Palette: “Shell Command: Install 'code' command in PATH”), Node and npm on each teammate’s machine, and a Supabase project for the team’s shared data. The full guide is in the <a href="https://github.com/Puhita/Hacky#install">README</a>.</p>
     </div>
   </section>
 
@@ -314,8 +314,8 @@
       <div class="row align-items-center g-5">
         <div class="col-lg-5 dl-txt">
           <div class="eyebrow">Hacky for Windows</div>
-          <h2 class="h2">Working in Unity, not VS Code?</h2>
-          <p class="lead">The Windows app shows the same sidebar, Board and Map in its own window. It sits in the tray, tells you when a question needs you, and updates itself.</p>
+          <h2 class="h2">Not working in VS Code?</h2>
+          <p class="lead">The Windows app shows the same sidebar, Board and Map in its own window, so it works next to any tool you build in: Unity, Blender, Cursor or anything else. It sits in the tray, tells you when a question needs you, and updates itself.</p>
           <div class="cta">
             <a class="btn btn-brand" id="dl-btn" href="https://github.com/Puhita/Hacky/releases"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5M4.8 7.2L8 10.4l3.2-3.2M3 13h10"/></svg>Download for Windows</a>
           </div>
@@ -325,7 +325,7 @@
           <ol class="dl-steps list-unstyled">
             <li><span class="n">1</span><div><h3>Download and run the installer</h3><p>Open the <code>Hacky-Setup</code> file you downloaded. It installs for your user only, no admin needed.</p></div></li>
             <li><span class="n">2</span><div><h3>Get past SmartScreen</h3><p>The app isn’t code-signed yet, so Windows says “Windows protected your PC”. Click <b>More info</b>, then <b>Run anyway</b>.</p></div></li>
-            <li><span class="n">3</span><div><h3>Log in and pick your team</h3><p>Use the same account as the extension, or sign up. Then create a team or join one with an invite code.</p></div></li>
+            <li><span class="n">3</span><div><h3>Log in and pick your team</h3><p>Use the same account as the extension, or sign up. The app and the extension share one login, so you can use both. Then create a team or join one with an invite code.</p></div></li>
             <li><span class="n">4</span><div><h3>Choose your project folder</h3><p>Click <b>Choose folder</b> and pick your project, then <b>Connect this folder</b>. New Claude Code chats in that folder join the team.</p></div></li>
           </ol>
         </div>
