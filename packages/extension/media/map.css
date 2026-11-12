@@ -603,3 +603,37 @@ button.secondary:hover {
 }
 
 .logo { width: 26px; height: 26px; flex: none; border-radius: 7px; }
+
+/* ---- Adaptive layout ---- */
+/* The header wraps instead of squeezing: title, then the legend, filters and zoom buttons. */
+header { flex-wrap: wrap; row-gap: 6px; }
+h1 { flex: 1 1 0; min-width: 90px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.legend { flex-wrap: wrap; gap: 2px 12px; }
+.key { white-space: nowrap; }
+.chips { flex-wrap: wrap; }
+.zoom { flex: none; margin-left: auto; }
+.zoom button { min-width: 30px; min-height: 26px; }
+.chip { min-height: 24px; }
+.progress .muted { white-space: nowrap; }
+.empty { padding: 0 16px; text-align: center; }
+
+/* Narrow: title and zoom on the first line, the legend and filters below, labels on the timeline
+   only as tooltips (they would overlap). */
+@media (max-width: 640px) {
+  header { gap: 6px 8px; padding: 6px 10px; }
+  h1 { min-width: 60px; font-size: 1.1em; }
+  .zoom button { padding: 4px 9px; }
+  .legend { order: 3; flex-basis: 100%; font-size: 0.9em; }
+  .chips { order: 4; }
+  .zoom { order: 2; }
+  .timeline { padding: 6px 10px 8px; }
+  .axis { height: 16px; }
+  .marker-label { display: none; }
+}
+/* Short: keep the map itself as large as possible. */
+@media (max-height: 520px) {
+  header { padding-top: 4px; padding-bottom: 4px; }
+  .timeline { padding-top: 4px; padding-bottom: 6px; }
+  .axis { height: 16px; }
+  .marker-label { display: none; }
+}

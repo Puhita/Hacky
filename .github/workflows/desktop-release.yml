@@ -16,6 +16,8 @@ jobs:
       # Only the public project URL and publishable key go into the app. RLS protects the data.
       SUPABASE_URL: ${{ vars.SUPABASE_URL }}
       SUPABASE_PUBLISHABLE_KEY: ${{ vars.SUPABASE_PUBLISHABLE_KEY }}
+      # Client ID of Hacky's GitHub OAuth App (device flow enabled), for Sign in with GitHub. Not secret.
+      GITHUB_CLIENT_ID: ${{ vars.HACKY_GITHUB_CLIENT_ID }}
       # electron-builder downloads its own copy for packaging.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:

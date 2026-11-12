@@ -11,13 +11,13 @@ const dir = process.env.HACKY_SMOKE_DIR ?? mkdtempSync(join(tmpdir(), "hacky-smo
 const env = { ...process.env, HACKY_SMOKE_DIR: dir };
 // Set inside VS Code's own processes; with it Electron would run as plain Node.
 delete env.ELECTRON_RUN_AS_NODE;
-spawnSync(electron, ["."], { env, stdio: "inherit", timeout: 120_000 });
+spawnSync(electron, ["."], { env, stdio: "inherit", timeout: process.env.HACKY_SMOKE_SIZES ? 600_000 : 120_000 });
 
 const report = JSON.parse(readFileSync(join(dir, "report.json"), "utf8"));
 const empty = ["sidebar", "board", "map", "skills", "git", "terminal"].filter((name) => !report[name]?.textLength);
 console.log(`Screenshots and report: ${dir}`);
-if (empty.length || report.problems.length || !report.mapTabOpened || !report.terminalWorked) {
-  console.error({ empty, problems: report.problems, mapTabOpened: report.mapTabOpened });
+if (empty.length || report.problems.length || !report.mapTabOpened || !report.terminalWorked || !report.splitterWorked) {
+  console.error({ empty, problems: report.problems, mapTabOpened: report.mapTabOpened, splitter: report.splitter });
   process.exit(1);
 }
 console.log("Smoke test passed.");

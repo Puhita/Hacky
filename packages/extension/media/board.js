@@ -700,8 +700,164 @@
     ]);
   }
 
+  // ---- GitHub and the same-project check ----
+
+  const ghLink = (url, text, className = "gh-a") =>
+    url
+      ? el("button", { type: "button", class: `linkish ${className}`, title: url, onclick: () => vscode.postMessage({ type: "openGithubLink", url }) }, [document.createTextNode(text)])
+      : el("span", { class: className, text });
+
+  function renderGithub(state) {
+    const github = state.github;
+    if (!github) return null;
+    const lead = state.team.role === "lead";
+    const head = (sub, extra) =>
+      el("div", { class: "bar" }, [el("div", {}, [el("h2", { text: "GitHub" }), el("div", { class: "sub", text: sub })]), el("span", { class: "sp" }), ...extra]);
+
+    const tokenInput = () => {
+      const input = el("input", { type: "password", class: "in", id: "gh-token", name: "token", autocomplete: "off", "aria-label": "GitHub token", placeholder: "GitHub token (github_pat_…)" });
+      const save = () => {
+        if (input.value.trim() === "") return;
+        vscode.postMessage({ type: "saveGithubToken", token: input.value });
+        input.value = "";
+      };
+      input.onkeydown = (event) => event.key === "Enter" && save();
+      return el("div", { class: "row gh-token" }, [input, button("Save token", "sec", save)]);
+    };
+
+    // The person's own GitHub account: signed in, waiting for the code, or not signed in.
+    const tokenRow = () => {
+      if (github.account || github.hasToken) {
+        const who = github.account?.login ? ` as ${github.account.login}` : "";
+        return el("div", { class: "row gh-token" }, [
+          el("span", { class: "muted", text: github.account?.via === "token" ? `Using your GitHub token${who}, saved on this computer only.` : `Signed in to GitHub${who}. The sign-in stays on this computer.` }),
+          button("Sign out of GitHub", "sec", () => vscode.postMessage({ type: "removeGithubToken" }), "close"),
+        ]);
+      }
+      if (github.signIn) {
+        return el("div", { class: "gh-device", role: "status" }, [
+          el("p", { text: "Enter this code on GitHub to finish signing in:" }),
+          el("div", { class: "row" }, [
+            el("code", { class: "gh-code", text: github.signIn.userCode }),
+            button("Copy code", "sec", () => navigator.clipboard?.writeText(github.signIn.userCode), "copy"),
+            button("Open GitHub", "cta", () => vscode.postMessage({ type: "openGithubLink", url: github.signIn.verificationUri })),
+            button("Cancel", "sec", () => vscode.postMessage({ type: "githubCancelSignIn" }), "close"),
+          ]),
+          el("p", { class: "muted", text: "Waiting for you to approve on GitHub…" }),
+        ]);
+      }
+      if (!github.canSignIn) return tokenInput();
+      const other = el("details", { class: "gh-other" }, [el("summary", { text: "Use a token instead" }), tokenInput()]);
+      return el("div", { class: "gh-signin" }, [
+        el("div", { class: "row" }, [
+          button("Sign in with GitHub", "cta", () => vscode.postMessage({ type: "githubSignIn" })),
+          el("span", { class: "muted", text: "To see private repositories and pick from your own." }),
+        ]),
+        other,
+      ]);
+    };
+
+    if (!github.link) {
+      const input = el("input", { type: "text", class: "in", id: "gh-repo", name: "repo", "aria-label": "GitHub repository", placeholder: github.folderRepo ?? "owner/name or github.com link" });
+      const link = () => vscode.postMessage({ type: "linkGithub", repo: input.value.trim() || github.folderRepo || "" });
+      input.onkeydown = (event) => event.key === "Enter" && link();
+      const repos = github.myRepos ?? [];
+      // A lead who signed in picks straight from their own repositories.
+      const picker = lead && repos.length > 0
+        ? el("div", { class: "gh-pick" }, [
+            el("h3", { text: "Your repositories" }),
+            el("ul", {}, repos.slice(0, 12).map((repo) =>
+              el("li", {}, [
+                el("span", { class: "grow", text: repo.fullName }),
+                repo.private ? el("span", { class: "tag", text: "private" }) : null,
+                repo.pushedAt ? el("span", { class: "muted", text: age(repo.pushedAt) }) : null,
+                button("Link", "sec", () => vscode.postMessage({ type: "linkGithub", repo: repo.fullName }), "plus"),
+              ]),
+            )),
+          ])
+        : null;
+      return el("section", { class: "gh" }, [
+        head("Link the repository your group works in. Everyone sees its pull requests and commits, and Hacky checks that everyone's folder is a copy of it.", []),
+        tokenRow(),
+        picker,
+        lead
+          ? el("div", { class: "row" }, [input, button(github.folderRepo && !input.value ? `Link ${github.folderRepo}` : "Link repository", "cta", link, "plus")])
+          : el("p", { class: "muted", text: github.folderRepo ? `A group lead can link it. Your folder pushes to ${github.folderRepo}.` : "A group lead can link the group's repository." }),
+      ]);
+    }
+
+    const overview = github.overview;
+    const meta = [];
+    if (overview) {
+      meta.push(overview.repo.private ? "private" : "public", `default branch ${overview.repo.defaultBranch}`, `${overview.pulls.length}${overview.pulls.length === 10 ? "+" : ""} open pull requests`);
+      if (overview.repo.pushedAt) meta.push(`last push ${age(overview.repo.pushedAt)} ago`);
+    }
+    const list = (heading, items, row) => el("div", { class: "gh-list" }, [el("h3", { text: heading }), items.length === 0 ? empty("None.") : el("ul", {}, items.map((item) => el("li", {}, row(item))))]);
+    return el("section", { class: "gh" }, [
+      head(`Linked by ${github.link.linkedBy ?? "a teammate"}, ${age(github.link.linkedAt)} ago.`, [
+        button(github.status === "loading" ? "Loading…" : "Refresh", "sec", () => vscode.postMessage({ type: "loadGithub" })),
+        lead ? button("Unlink", "sec", () => vscode.postMessage({ type: "unlinkGithub" }), "close") : null,
+      ]),
+      el("div", { class: "gh-repo" }, [
+        ghLink(overview?.repo.url || `https://github.com/${github.link.repo}`, github.link.repo, "gh-name"),
+        overview?.repo.description ? el("span", { class: "muted", text: overview.repo.description }) : null,
+      ]),
+      meta.length > 0 ? el("div", { class: "muted gh-meta", text: meta.join(" · ") }) : null,
+      github.error ? el("p", { class: "error", role: "alert", text: github.error }) : null,
+      overview
+        ? el("div", { class: "kan two gh-cols" }, [
+            list("Open pull requests", overview.pulls, (pull) => [
+              ghLink(pull.url, `#${pull.number} ${pull.title}`),
+              el("span", { class: "muted", text: ` ${pull.draft ? "draft · " : ""}${pull.author} · ${age(pull.updatedAt)}` }),
+            ]),
+            list("Latest commits", overview.commits, (commit) => [
+              ghLink(commit.url, commit.sha, "gh-sha"),
+              el("span", { text: ` ${commit.message}` }),
+              el("span", { class: "muted", text: ` ${commit.author} · ${age(commit.date)}` }),
+            ]),
+          ])
+        : null,
+      tokenRow(),
+    ]);
+  }
+
+  const VERDICT_TEXT = { same: "Same project", different: "Different project", unknown: "Can't tell", missing: "No folder yet" };
+
+  function renderSameProject(state) {
+    const check = state.github?.check;
+    if (!check) return null;
+    const summary =
+      check.status === "mismatch"
+        ? "Someone is working in a different project. Check their folder before you merge work."
+        : check.status === "ok"
+          ? "Everyone who opened Hacky is in the same project."
+          : check.basis === "none"
+            ? "Nobody's folder is a git repository yet, so Hacky can only compare folder names."
+            : "Not everyone can be compared yet.";
+    const names = (state.members ?? []).map((member) => member.name);
+    return el("section", { class: `same ${check.status}` }, [
+      el("div", { class: "bar" }, [
+        el("div", {}, [
+          el("h2", { text: "Same project?" }),
+          el("div", { class: "sub", text: check.basis === "github" ? "Each person's open folder, compared with the linked repository." : "Each person's open folder, compared by git history and remote. Link GitHub above for a firmer check." }),
+        ]),
+      ]),
+      el("p", { class: `same-sum ${check.status}`, role: check.status === "mismatch" ? "alert" : "status", text: summary }),
+      el("ul", { class: "same-rows" }, check.rows.map((row) =>
+        el("li", { class: `same-row v-${row.verdict}` }, [
+          avatar({ name: row.name }, Math.max(0, names.indexOf(row.name)), "sm"),
+          el("b", { text: row.me ? `${row.name} (you)` : row.name }),
+          el("span", { class: `verdict v-${row.verdict}`, text: VERDICT_TEXT[row.verdict] ?? row.verdict }),
+          el("span", { class: "muted grow", text: row.reason }),
+        ]),
+      )),
+    ]);
+  }
+
   function renderProject(state) {
     return el("div", { class: "bc-in" }, [
+      renderGithub(state),
+      renderSameProject(state),
       renderOverview(state),
       el("div", { class: "kan two" }, [renderItemColumn(state, "idea", "Ideas"), renderItemColumn(state, "bug", "Bugs")]),
     ]);
@@ -825,7 +981,8 @@
     }
     if (id === "project") {
       const open = (state.project?.items ?? []).filter((item) => item.status === "open" && item.kind === "bug").length;
-      return open > 0 ? hex("needs", open) : null;
+      const mismatch = state.github?.check?.status === "mismatch" ? 1 : 0;
+      return open + mismatch > 0 ? hex("needs", open + mismatch) : null;
     }
     if (id === "team") return liveChats(state) > 0 ? el("i", { class: "pd live" }) : null;
     return null;

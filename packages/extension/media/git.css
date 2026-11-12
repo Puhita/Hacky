@@ -56,3 +56,18 @@ body { margin: 0; padding: 0; font: var(--vscode-font-size, 13px)/1.45 var(--vsc
 .hk .branches ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .hk .branches li { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
 .hk .branches li.cur .chip { border-color: var(--brand); }
+
+/* ---- Adaptive layout ---- */
+.hk .bar { flex-wrap: wrap; row-gap: 6px; }
+.hk .btn { min-height: 28px; }
+.hk .msg, .hk .branches li { overflow-wrap: anywhere; }
+.hk .branches .chip { max-width: 100%; }
+.hk .subject { min-width: 120px; }
+@media (min-width: 1600px) { .hk .page { max-width: 1400px; } .hk .layout { grid-template-columns: minmax(0, 1fr) 320px; } }
+/* Narrow: the history still scrolls sideways, but needs less room, and the gutters shrink. */
+@media (max-width: 520px) {
+  .hk .page { padding: 12px 10px 28px; }
+  .hk .rows { min-width: 340px; }
+  .hk .who { max-width: 96px; }
+  .hk .chip { max-width: 110px; }
+}

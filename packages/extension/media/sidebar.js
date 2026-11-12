@@ -532,6 +532,19 @@
     const need = state.inbox.length + incoming.length;
     const nodes = [];
 
+    // Someone's folder is a different project from the rest of the team.
+    const check = state.github?.check;
+    if (check?.status === "mismatch") {
+      const off = check.rows.filter((row) => row.verdict === "different").map((row) => (row.me ? "Your folder" : `${row.name}'s folder`));
+      nodes.push(
+        el("div", { class: "proj-warn", role: "alert" }, [
+          glyph("needs"),
+          el("p", { text: `${off.join(", ")} ${off.length === 1 ? "looks like" : "look like"} a different project from the rest of the team.` }),
+          Object.assign(el("button", { type: "button", class: "btn sec", text: "See why" }), { onclick: () => vscode.postMessage({ type: "openBoard" }) }),
+        ]),
+      );
+    }
+
     if (need === 0 && state.assumptions.length === 0) {
       nodes.push(
         el("div", { class: "empty" }, [

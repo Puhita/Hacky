@@ -22,6 +22,30 @@ import type {
 } from "./api.js";
 import { MIN_PASSWORD_LENGTH } from "./api.js";
 import { readGit, type GitGraph } from "./gitTree.js";
+import type { GithubLink } from "./api.js";
+import {
+  checkTokenShape,
+  compareProjects,
+  deleteToken,
+  fetchGithubOverview,
+  fetchMyRepos,
+  githubLogin,
+  githubRepoOf,
+  pollDeviceFlow,
+  readAccount,
+  startDeviceFlow,
+  writeAccount,
+  type DeviceCode,
+  type GithubRepoChoice,
+  parseRepo,
+  readFingerprint,
+  readToken,
+  writeToken,
+  type Fingerprint,
+  type GithubFetch,
+  type GithubOverview,
+  type ProjectCheck,
+} from "./github.js";
 import { installedSkill, installSkill, lookUpSkill, parseGithubUrl, previewPicked, removeSkill, type Fetch, type SkillLookup } from "./skills.js";
 import { connectedTeamId, connectWorkspace, EDITORS, managedBlockIsCurrent, type Editor } from "./setup.js";
 
@@ -57,6 +81,32 @@ export type SkillsState = {
 // The Git screen's data. It is read when the screen asks, not on every refresh, because running git is slow.
 export type GitState = { status: "idle" | "ok" | "error"; error: string | null; graph: GitGraph | null; loadedAt: number | null };
 
+// The GitHub section and the same-project check.
+export type GithubState = {
+  link: GithubLink | null;
+  // The person saved a GitHub token on this computer.
+  hasToken: boolean;
+  // The GitHub account the person signed in with, kept on this computer only.
+  account: { login: string; via: "signin" | "token" } | null;
+  // Sign in with GitHub is available in this app.
+  canSignIn: boolean;
+  // A device sign-in waiting for the person to enter the code on GitHub.
+  signIn: { userCode: string; verificationUri: string; expiresAt: number } | null;
+  // The signed-in person's repositories, for a lead to pick one to link. Empty when not signed in.
+  myRepos: GithubRepoChoice[];
+  // owner/name of the active folder's GitHub remote, offered as the repository to link.
+  folderRepo: string | null;
+  status: "idle" | "loading" | "ok" | "error";
+  error: string | null;
+  overview: GithubOverview | null;
+  loadedAt: number | null;
+  check: ProjectCheck | null;
+};
+
+// How long a folder's fingerprint and the GitHub overview are reused before they are read again.
+const FINGERPRINT_TTL_MS = 2 * 60_000;
+const GITHUB_TTL_MS = 10 * 60_000;
+
 export type SidebarState = {
   // displayName is the name teammates see: the one given when joining or creating a group, or changed in the profile.
   user: { email: string; displayName: string | null } | null;
@@ -78,6 +128,7 @@ export type SidebarState = {
   agentChat: PeerThread[];
   skills: SkillsState;
   git: GitState;
+  github: GithubState;
   // What the Hacky Map draws. Empty until the first refresh for a team.
   map: MapState;
   notice: string | null;
@@ -123,7 +174,15 @@ export type Message =
   | { type: "openBoard" }
   | { type: "openSkills" }
   | { type: "openGit" }
-  | { type: "loadGit" };
+  | { type: "loadGit" }
+  | { type: "linkGithub"; repo?: string }
+  | { type: "unlinkGithub" }
+  | { type: "saveGithubToken"; token: string }
+  | { type: "removeGithubToken" }
+  | { type: "githubSignIn" }
+  | { type: "githubCancelSignIn" }
+  | { type: "loadGithub" }
+  | { type: "openGithubLink"; url: string };
 
 export type ControllerOptions = {
   api: HackyApi;
@@ -149,6 +208,18 @@ export type ControllerOptions = {
   openSkills?: () => void;
   // Opens the Git screen in an editor tab.
   openGit?: () => void;
+  // Where the person's GitHub token is kept on this computer. Without it, tokens can't be saved.
+  githubTokenFile?: string;
+  // The client ID of Hacky's GitHub OAuth App, for Sign in with GitHub through the device flow.
+  githubClientId?: string;
+  // The host's own GitHub sign-in, used instead of the device flow when present (VS Code has one).
+  githubSignIn?: () => Promise<{ token: string; login: string } | null>;
+  // Opens a github.com link in the person's browser.
+  openExternal?: (url: string) => void;
+  // Replaces the network call to GitHub's API. Tests pass a fake.
+  githubFetch?: GithubFetch;
+  // Replaces reading the active folder's fingerprint with git. Tests pass a fake.
+  readFingerprint?: (dir: string) => Promise<Fingerprint>;
 };
 
 // Both boxes must agree, and the password must be long enough for the account service to take it.
@@ -184,6 +255,18 @@ export class SidebarController {
   private skillFromTeam = false;
   private git: GitState = { status: "idle", error: null, graph: null, loadedAt: null };
   private lastState: SidebarState | null = null;
+  private github: { repo: string | null; status: GithubState["status"]; error: string | null; overview: GithubOverview | null; loadedAt: number | null } = {
+    repo: null,
+    status: "idle",
+    error: null,
+    overview: null,
+    loadedAt: null,
+  };
+  private fingerprint: { dir: string; at: number; value: Fingerprint } | null = null;
+  // What was last saved to the team, so an unchanged folder isn't written on every refresh.
+  private reportedFingerprint: string | null = null;
+  private deviceFlow: (DeviceCode & { cancelled: boolean }) | null = null;
+  private myRepos: { token: string; at: number; repos: GithubRepoChoice[] } | null = null;
 
   constructor(private readonly options: ControllerOptions) {
     this.teamId = options.loadTeamId();
@@ -198,6 +281,7 @@ export class SidebarController {
     clearInterval(this.timer);
     clearInterval(this.digestTimer);
     clearTimeout(this.debounce);
+    if (this.deviceFlow) this.deviceFlow.cancelled = true;
     this.unsubscribe?.();
   }
 
@@ -389,7 +473,214 @@ export class SidebarController {
         if (this.lastState) this.options.post({ ...this.lastState, git: this.git });
         return;
       }
+      case "linkGithub": {
+        const teamId = this.requireTeam();
+        const typed = (message.repo ?? "").trim();
+        let repo: string;
+        if (typed) repo = parseRepo(typed);
+        else {
+          const dir = this.options.workspaceDir();
+          const found = dir ? githubRepoOf((await this.folderFingerprint(dir, true)).remote) : null;
+          if (!found) throw new Error("This folder has no GitHub remote. Type the repository as owner/name.");
+          repo = found;
+        }
+        await api.linkGithubRepo(teamId, repo);
+        this.github = { repo: null, status: "idle", error: null, overview: null, loadedAt: null };
+        this.notice = `Linked ${repo}. Everyone in the group now sees it, and folders are checked against it.`;
+        return;
+      }
+      case "unlinkGithub":
+        await api.unlinkGithubRepo(this.requireTeam());
+        this.github = { repo: null, status: "idle", error: null, overview: null, loadedAt: null };
+        this.notice = "GitHub repository unlinked.";
+        return;
+      case "saveGithubToken": {
+        const file = this.options.githubTokenFile;
+        if (!file) throw new Error("Tokens can't be saved here.");
+        const token = checkTokenShape(message.token);
+        const login = await githubLogin(token, this.githubApi());
+        writeAccount(file, { token, login, via: "token" });
+        this.github = { ...this.github, loadedAt: null };
+        this.notice = `GitHub token saved on this computer for ${login || "your account"}. It is never sent to Hacky.`;
+        return;
+      }
+      case "removeGithubToken":
+        if (this.options.githubTokenFile) deleteToken(this.options.githubTokenFile);
+        this.github = { ...this.github, loadedAt: null };
+        this.myRepos = null;
+        this.notice = "Signed out of GitHub on this computer.";
+        return;
+      case "githubSignIn":
+        return this.startGithubSignIn();
+      case "githubCancelSignIn":
+        if (this.deviceFlow) this.deviceFlow.cancelled = true;
+        this.deviceFlow = null;
+        return;
+      case "loadGithub":
+        this.github = { ...this.github, loadedAt: null };
+        return;
+      case "openGithubLink":
+        // Messages come from a web page, so only github.com pages open.
+        if (typeof message.url !== "string" || !/^https:\/\/github\.com\/[^\s]*$/.test(message.url)) throw new Error("Only github.com links open from here.");
+        this.options.openExternal?.(message.url);
+        return;
     }
+  }
+
+  private githubApi(): GithubFetch {
+    return this.options.githubFetch ?? ((url, init) => fetch(url, init) as ReturnType<GithubFetch>);
+  }
+
+  private githubToken(): string | null {
+    return this.options.githubTokenFile ? readToken(this.options.githubTokenFile) : null;
+  }
+
+  private saveGithubAccount(token: string, login: string): void {
+    const file = this.options.githubTokenFile;
+    if (!file) throw new Error("GitHub sign-in can't be saved here.");
+    writeAccount(file, { token, login, via: "signin" });
+    this.github = { ...this.github, loadedAt: null };
+    this.myRepos = null;
+  }
+
+  // Signs in with the host's own GitHub sign-in, or else with GitHub's device flow, which waits in
+  // the background for the person to enter the code on github.com.
+  private async startGithubSignIn(): Promise<void> {
+    if (this.options.githubSignIn) {
+      const session = await this.options.githubSignIn();
+      if (!session) return;
+      this.saveGithubAccount(session.token, session.login);
+      this.notice = `Signed in to GitHub as ${session.login}.`;
+      return;
+    }
+    const clientId = this.options.githubClientId;
+    if (!clientId) throw new Error("Sign in with GitHub isn't set up in this build. Use a token instead.");
+    if (this.deviceFlow) this.deviceFlow.cancelled = true;
+    const flow = { ...(await startDeviceFlow(clientId, this.githubApi())), cancelled: false };
+    this.deviceFlow = flow;
+    this.options.openExternal?.(flow.verificationUri);
+    void this.pollGithubSignIn(clientId, flow);
+  }
+
+  private async pollGithubSignIn(clientId: string, flow: DeviceCode & { cancelled: boolean }): Promise<void> {
+    let interval = flow.intervalSeconds;
+    const finish = async (notice: string | null, error: string | null) => {
+      if (this.deviceFlow === flow) this.deviceFlow = null;
+      this.notice = notice;
+      this.error = error;
+      await this.refresh();
+    };
+    while (!flow.cancelled) {
+      await new Promise((resolve) => setTimeout(resolve, interval * 1000));
+      if (flow.cancelled) return;
+      if (Date.now() > flow.expiresAt) return finish(null, "The GitHub sign-in code expired. Start again.");
+      let result;
+      try {
+        result = await pollDeviceFlow(clientId, flow.deviceCode, this.githubApi());
+      } catch {
+        // A network hiccup: ask again on the next tick.
+        continue;
+      }
+      if (flow.cancelled) return;
+      if (result.kind === "pending") continue;
+      if (result.kind === "slow_down") {
+        interval = result.intervalSeconds;
+        continue;
+      }
+      if (result.kind === "error") return finish(null, result.message);
+      try {
+        const login = await githubLogin(result.token, this.githubApi());
+        this.saveGithubAccount(result.token, login);
+        return finish(`Signed in to GitHub as ${login}. The sign-in stays on this computer only.`, null);
+      } catch (error) {
+        return finish(null, (error as Error).message);
+      }
+    }
+  }
+
+  // The signed-in person's repositories, read again after a while.
+  private async loadMyRepos(token: string): Promise<GithubRepoChoice[]> {
+    const cached = this.myRepos;
+    if (cached && cached.token === token && Date.now() - cached.at < GITHUB_TTL_MS) return cached.repos;
+    const repos = await fetchMyRepos(token, this.githubApi());
+    this.myRepos = { token, at: Date.now(), repos };
+    return repos;
+  }
+
+  // The active folder's fingerprint, read again after a while, since the remote can change.
+  private async folderFingerprint(dir: string, fresh = false): Promise<Fingerprint> {
+    const cached = this.fingerprint;
+    if (!fresh && cached && cached.dir === dir && Date.now() - cached.at < FINGERPRINT_TTL_MS) return cached.value;
+    const value = await (this.options.readFingerprint ?? readFingerprint)(dir);
+    this.fingerprint = { dir, at: Date.now(), value };
+    return value;
+  }
+
+  // Reports the active folder, compares everyone's, and reads the linked repository from GitHub when it is stale.
+  // Never throws: GitHub and the check are extras that shouldn't hide the rest of the app.
+  private async githubState(teamId: string, members: TeamMember[]): Promise<GithubState> {
+    const { api } = this.options;
+    const dir = this.options.workspaceDir();
+    let folderRepo: string | null = null;
+    try {
+      if (dir) {
+        const print = await this.folderFingerprint(dir);
+        folderRepo = githubRepoOf(print.remote);
+        const key = JSON.stringify([teamId, print]);
+        if (key !== this.reportedFingerprint) {
+          await api.reportFingerprint(teamId, print);
+          this.reportedFingerprint = key;
+        }
+      }
+    } catch {
+      // Try again on the next refresh.
+    }
+    let link: GithubLink | null = null;
+    let check: ProjectCheck | null = null;
+    try {
+      link = await api.githubLink(teamId);
+      check = compareProjects(
+        members.map((member) => ({ userId: member.id, name: member.name, me: member.me })),
+        await api.projectFingerprints(teamId),
+        link?.repo ?? null,
+      );
+    } catch {
+      // Shown as no link and no check.
+    }
+    const repo = link?.repo ?? null;
+    if (repo !== this.github.repo) this.github = { repo, status: "idle", error: null, overview: null, loadedAt: null };
+    if (repo && this.github.status !== "loading" && (this.github.loadedAt === null || Date.now() - this.github.loadedAt > GITHUB_TTL_MS)) {
+      this.github = { ...this.github, status: "loading" };
+      try {
+        this.github = { repo, status: "ok", error: null, overview: await fetchGithubOverview(repo, this.githubToken(), this.githubApi()), loadedAt: Date.now() };
+      } catch (error) {
+        this.github = { repo, status: "error", error: (error as Error).message, overview: null, loadedAt: Date.now() };
+      }
+    }
+    const stored = this.options.githubTokenFile ? readAccount(this.options.githubTokenFile) : null;
+    let myRepos: GithubRepoChoice[] = [];
+    if (stored && !link) {
+      try {
+        myRepos = await this.loadMyRepos(stored.token);
+      } catch {
+        // The list is a shortcut; typing the name still works.
+      }
+    }
+    const flow = this.deviceFlow;
+    return {
+      link,
+      hasToken: stored !== null,
+      account: stored ? { login: stored.login, via: stored.via } : null,
+      canSignIn: Boolean(this.options.githubSignIn || this.options.githubClientId) && Boolean(this.options.githubTokenFile),
+      signIn: flow ? { userCode: flow.userCode, verificationUri: flow.verificationUri, expiresAt: flow.expiresAt } : null,
+      myRepos,
+      folderRepo,
+      status: this.github.status,
+      error: this.github.error,
+      overview: this.github.overview,
+      loadedAt: this.github.loadedAt,
+      check,
+    };
   }
 
   // Tells the person what teammates logged since the last digest, at the chosen cadence.
@@ -507,6 +798,7 @@ export class SidebarController {
       agentChat: [],
       skills: { team: [], lookup: null, fromTeam: false },
       git: this.git,
+      github: { link: null, hasToken: false, account: null, canSignIn: false, signIn: null, myRepos: [], folderRepo: null, status: "idle", error: null, overview: null, loadedAt: null, check: null },
       map: {
         project: "",
         owners: [],
@@ -546,6 +838,7 @@ export class SidebarController {
           state.project = await api.projectState(state.team.id);
           state.fileTouches = await api.fileTouches(state.team.id);
           state.skills = await this.skillsState(state.team.id);
+          state.github = await this.githubState(state.team.id, state.members);
           this.announceTeammateQuestions(state.agentChat);
         }
       }

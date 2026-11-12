@@ -2,11 +2,12 @@
 import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js";
 import { fileStorage } from "hacky-mcp-server/credentials";
 import { redact } from "hacky-mcp-server/redact";
+import type { Fingerprint, MemberFingerprint } from "./github.js";
 
 const FEED_LIMIT = 30;
 const DECISION_LIMIT = 50;
 const TASK_LIMIT = 200;
-const LIVE_TABLES = ["file_touches", "team_overview", "project_items", "events", "questions", "question_waiters", "decisions", "tasks", "assumptions", "agent_sessions", "peer_questions"];
+const LIVE_TABLES = ["team_github", "project_fingerprints", "file_touches", "team_overview", "project_items", "events", "questions", "question_waiters", "decisions", "tasks", "assumptions", "agent_sessions", "peer_questions"];
 const PEER_THREAD_LIMIT = 20;
 // Matches the MCP server: a chat that hasn't touched Hacky for this long counts as idle.
 const ACTIVE_WINDOW_MS = 10 * 60_000;
@@ -68,6 +69,8 @@ export type ProjectItem = {
 export type ProjectState = { overview: ProjectOverview; items: ProjectItem[] };
 // A skill the team shares: where it comes from on GitHub, pinned to one commit.
 export type TeamSkill = { id: string; name: string; repo: string; path: string; sha: string; addedBy: string | null };
+// The one GitHub repository a group works in.
+export type GithubLink = { repo: string; linkedBy: string | null; linkedAt: string };
 // A question between two people's agents, seen from the signed-in person.
 export type PeerThread = {
   id: string;
@@ -156,6 +159,13 @@ export type MapState = {
 function unwrap<T>({ data, error }: { data: T; error: { message: string } | null }): NonNullable<T> {
   if (error) throw new Error(error.message);
   return data as NonNullable<T>;
+}
+
+// The GitHub link functions arrive with migration 20261112100000. Says so when the database is older.
+function githubUnwrap<T>(result: { data: T; error: { message: string; code?: string } | null }): void {
+  if (result.error?.code === "PGRST202") throw new Error("The team database doesn't have GitHub links yet. Whoever owns the Supabase project needs to run npx supabase db push.");
+  if (result.error?.message.includes("only a group lead")) throw new Error("Only a group lead can link or unlink the repository.");
+  unwrap(result);
 }
 
 export class HackyApi {
@@ -539,6 +549,58 @@ export class HackyApi {
   async addTask(teamId: string, title: string, area?: TaskArea): Promise<void> {
     if (area !== undefined && !TASK_AREAS.includes(area)) throw new Error(`Unknown area: ${area}`);
     unwrap(await this.supabase.from("tasks").insert({ team_id: teamId, title: redact(title), ...(area && { area }) }));
+  }
+
+  // The GitHub repository the group linked, or null. Older databases without the table have none.
+  async githubLink(teamId: string): Promise<GithubLink | null> {
+    const result = await this.supabase.from("team_github").select("repo, linked_by, linked_at").eq("team_id", teamId).maybeSingle();
+    if (result.error?.code === "PGRST205") return null;
+    const row = unwrap(result);
+    if (!row) return null;
+    const names = await this.memberNames(teamId);
+    return { repo: row.repo, linkedBy: row.linked_by ? (names.get(row.linked_by) ?? null) : null, linkedAt: row.linked_at };
+  }
+
+  // Leads only; the database checks.
+  async linkGithubRepo(teamId: string, repo: string): Promise<void> {
+    githubUnwrap(await this.supabase.rpc("link_github_repo", { target_team: teamId, repo_name: repo }));
+  }
+
+  async unlinkGithubRepo(teamId: string): Promise<void> {
+    githubUnwrap(await this.supabase.rpc("unlink_github_repo", { target_team: teamId }));
+  }
+
+  // What project each person's active folder is.
+  async projectFingerprints(teamId: string): Promise<MemberFingerprint[]> {
+    const result = await this.supabase.from("project_fingerprints").select("user_id, folder_name, root_commit, remote, updated_at").eq("team_id", teamId);
+    if (result.error?.code === "PGRST205") return [];
+    const user = await this.currentUser();
+    const [rows, names] = [unwrap(result), await this.memberNames(teamId)];
+    return rows.map((row) => ({
+      userId: row.user_id,
+      name: names.get(row.user_id) ?? "A teammate",
+      me: row.user_id === user?.id,
+      folderName: row.folder_name,
+      rootCommit: row.root_commit,
+      remote: row.remote,
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  // Saves what the signed-in person's active folder is. Only the folder's name leaves the computer, never its path.
+  async reportFingerprint(teamId: string, fingerprint: Fingerprint): Promise<void> {
+    const user = await this.currentUser();
+    if (!user) return;
+    const result = await this.supabase.from("project_fingerprints").upsert({
+      team_id: teamId,
+      user_id: user.id,
+      folder_name: fingerprint.folderName,
+      root_commit: fingerprint.rootCommit,
+      remote: fingerprint.remote ? redact(fingerprint.remote) : null,
+      updated_at: new Date().toISOString(),
+    });
+    if (result.error?.code === "PGRST205") return;
+    unwrap(result);
   }
 
   private async memberNames(teamId: string): Promise<Map<string, string>> {

@@ -287,6 +287,12 @@ body { margin: 0; padding: 0; font: var(--vscode-font-size, 13px)/1.45 var(--vsc
   .inv-l, .team-s { display: none; }
   .fb, .as-a, .fb2 { padding-left: 10px; }
   .chats { padding-left: 10px; }
+  .hd, .scroll, .page { padding-left: 10px; padding-right: 10px; }
+  .strip { gap: 4px; padding-left: 10px; padding-right: 10px; }
+  .tile { padding: 6px; }
+  .tabs { gap: 2px; padding-left: 4px; padding-right: 4px; }
+  .tab { padding-left: 8px; padding-right: 8px; }
+  .auth { padding: 20px 14px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -323,3 +329,55 @@ button.team:hover { background: var(--hover); }
 .btn.add { height: 36px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--fg); border: 1px solid color-mix(in srgb, var(--brand) 70%, transparent); background: color-mix(in srgb, var(--brand) 20%, var(--bg)); box-shadow: none; }
 .btn.add:hover { background: color-mix(in srgb, var(--brand) 32%, var(--bg)); border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent); }
 .btn.add svg { width: 16px; height: 16px; stroke-width: 2.2; color: #fff; }
+
+/* Someone's folder is a different project. */
+.proj-warn { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; border-left: 3px solid var(--vscode-charts-orange, #d18616); background: color-mix(in srgb, var(--vscode-charts-orange, #d18616) 10%, transparent); }
+.proj-warn p { flex: 1; min-width: 140px; margin: 0; }
+
+/* ---- Adaptive layout: from a 240px panel to a wide one, and short windows ---- */
+.hk p, .hl, .mc-t, .mc-s, .proj-warn p { overflow-wrap: anywhere; }
+/* Header: the team name keeps its room; the icon buttons move to a second line when they don't fit. */
+.hd-row { flex-wrap: wrap; row-gap: 4px; }
+/* In a short panel the list scrolls; its cards (overflow: hidden) must not be squashed instead. */
+.scroll > * { flex-shrink: 0; }
+.team { flex: 1 1 96px; }
+.acts { flex-wrap: wrap; justify-content: flex-end; margin-left: auto; }
+/* Tabs never wrap their labels; if they still don't fit they scroll sideways. */
+.tabs { overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.tab { flex: none; white-space: nowrap; }
+/* Folder rows and the account line wrap instead of squeezing. */
+.frow { flex-wrap: wrap; row-gap: 6px; }
+.frow .ft { flex: 1 1 90px; }
+.row2 p { min-width: 0; }
+.gcard, .mrow, .prow { flex-wrap: wrap; }
+.gcard .ch, .mrow .ch, .prow .ch { flex-basis: 120px; }
+.dec-a { flex-wrap: wrap; }
+.row { flex-wrap: wrap; }
+/* The folder panel at the bottom never takes over the screen. */
+.foot.off { max-height: min(50vh, 440px); overflow-y: auto; scrollbar-width: thin; }
+/* Sign in and team choice stay a comfortable width in a wide panel. */
+.auth > *, .team-choice > * { width: 100%; max-width: 420px; margin-left: auto; margin-right: auto; }
+.empty p, .brand p { max-width: 300px; }
+
+/* Short windows: tighter header, and the status tiles go when there is no room for the list. */
+@media (max-height: 640px) {
+  .hd { padding-top: 8px; padding-bottom: 6px; gap: 6px; }
+  /* The tabs below already carry the same counts. */
+  .strip { display: none; }
+  .tabs { margin-top: 2px; }
+  .tab { padding-top: 6px; padding-bottom: 9px; }
+  .scroll { padding-top: 10px; gap: 10px; }
+  .foot.off { max-height: 32vh; padding: 10px 12px; gap: 6px; }
+  .auth { justify-content: flex-start; gap: 14px; padding-top: 16px; padding-bottom: 16px; }
+  .logo.big { width: 52px; height: 52px; }
+}
+@media (max-height: 460px) {
+  .inv { display: none; }
+  .foot.off { max-height: 28vh; }
+}
+/* Three labelled tabs need about 360px; below that only the open one keeps its label. */
+@container hk (max-width: 360px) {
+  .tab:not(.on) .lbl { display: none; }
+}
+/* .center also sets text-align; a centred card header still reads from the left. */
+.card-h.center { text-align: left; }
