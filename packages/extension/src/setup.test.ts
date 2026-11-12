@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
-import { connectedTeamId, connectWorkspace, managedBlockIsCurrent, MANAGED_BLOCK, TOUCH_HOOK_COMMAND, withTouchHook } from "./setup.js";
+import { connectedTeamId, connectWorkspace, managedBlockIsCurrent, MANAGED_BLOCK, SERVER_PACKAGE, SERVER_VERSION, TOUCH_HOOK_COMMAND, withTouchHook } from "./setup.js";
 
 const CONFIG = { supabaseUrl: "https://x.supabase.co", publishableKey: "sb_publishable_x", teamId: "team-1" };
 let dir: string;
@@ -20,7 +20,7 @@ test("sets up an empty folder", () => {
   connectWorkspace(dir, CONFIG, "linux");
   const server = readJson(".mcp.json").mcpServers.hacky;
   assert.equal(server.command, "npx");
-  assert.deepEqual(server.args, ["-y", "hacky-mcp-server"]);
+  assert.deepEqual(server.args, ["-y", SERVER_PACKAGE]);
   assert.deepEqual(server.env, {
     HACKY_SUPABASE_URL: CONFIG.supabaseUrl,
     HACKY_SUPABASE_PUBLISHABLE_KEY: CONFIG.publishableKey,
@@ -37,7 +37,7 @@ test("uses the cmd wrapper on Windows", () => {
   connectWorkspace(dir, CONFIG, "win32");
   const server = readJson(".mcp.json").mcpServers.hacky;
   assert.equal(server.command, "cmd");
-  assert.deepEqual(server.args, ["/c", "npx", "-y", "hacky-mcp-server"]);
+  assert.deepEqual(server.args, ["/c", "npx", "-y", SERVER_PACKAGE]);
 });
 
 test("keeps everything already in the user's files", () => {
@@ -116,6 +116,30 @@ test("an older block, a missing block and a missing file are all out of date", (
   assert.equal(managedBlockIsCurrent(dir), false, "no end marker");
 });
 
+test("the server version named in configs matches the server package", () => {
+  // Tests run from packages/extension.
+  const server = JSON.parse(readFileSync(join(process.cwd(), "../mcp-server/package.json"), "utf8"));
+  assert.equal(SERVER_VERSION, server.version, "bump SERVER_VERSION in setup.ts with the server");
+  assert.equal(TOUCH_HOOK_COMMAND, `npx -y hacky-mcp-server@${server.version} touch`);
+});
+
+test("a folder set up with an unpinned or older server is out of date until connected again", () => {
+  connectWorkspace(dir, CONFIG, "linux");
+  assert.equal(managedBlockIsCurrent(dir), true);
+  const mcp = JSON.parse(read(".mcp.json"));
+  mcp.mcpServers.hacky.args = ["-y", "hacky-mcp-server"];
+  writeFileSync(join(dir, ".mcp.json"), JSON.stringify(mcp));
+  assert.equal(managedBlockIsCurrent(dir), false, "unpinned server");
+  const settings = JSON.parse(read(".claude/settings.local.json"));
+  settings.hooks.PostToolUse[0].hooks[0].command = "npx -y hacky-mcp-server touch";
+  writeFileSync(join(dir, ".claude/settings.local.json"), JSON.stringify(settings));
+  connectWorkspace(dir, CONFIG, "linux");
+  assert.equal(managedBlockIsCurrent(dir), true);
+  const hooks = JSON.parse(read(".claude/settings.local.json")).hooks.PostToolUse;
+  assert.equal(hooks.length, 1, "the old hook is replaced, not doubled");
+  assert.equal(hooks[0].hooks[0].command, TOUCH_HOOK_COMMAND);
+});
+
 test("connecting again brings an older block up to date and keeps the rest", () => {
   writeFileSync(join(dir, "CLAUDE.md"), "Before\n\n<!-- hacky:start -->\nold text\n<!-- hacky:end -->\n\nAfter\n");
   connectWorkspace(dir, CONFIG, "linux");
@@ -143,7 +167,7 @@ test("connects Codex with a TOML section and AGENTS.md", () => {
   connectWorkspace(dir, CONFIG, "win32", ["codex"]);
   const toml = read(".codex/config.toml");
   assert.ok(toml.startsWith('model = "gpt-x"\n\n[mcp_servers.other]\ncommand = "other"\n'));
-  assert.ok(toml.includes('[mcp_servers.hacky]\ncommand = "cmd"\nargs = ["/c", "npx", "-y", "hacky-mcp-server"]'));
+  assert.ok(toml.includes(`[mcp_servers.hacky]\ncommand = "cmd"\nargs = ["/c", "npx", "-y", "${SERVER_PACKAGE}"]`));
   assert.ok(toml.includes('HACKY_TEAM_ID = "team-1"'));
   assert.ok(read("AGENTS.md").startsWith("# Mine\n"));
   assert.ok(read("AGENTS.md").includes(MANAGED_BLOCK));

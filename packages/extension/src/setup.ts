@@ -53,8 +53,14 @@ function readJson(file: string): Record<string, any> {
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value, null, 2) + "\n");
 
 // On native Windows, Claude Code can't launch npx directly and needs the cmd wrapper.
+// The server version this extension was built with. npx keeps using whatever copy it cached first
+// when no version is given, so every command names this one. Kept equal to
+// packages/mcp-server/package.json by a test.
+export const SERVER_VERSION = "0.1.2";
+export const SERVER_PACKAGE = `hacky-mcp-server@${SERVER_VERSION}`;
+
 function launchCommand(platform: NodeJS.Platform) {
-  const npx = ["npx", "-y", "hacky-mcp-server"];
+  const npx = ["npx", "-y", SERVER_PACKAGE];
   return platform === "win32" ? { command: "cmd", args: ["/c", ...npx] } : { command: npx[0], args: npx.slice(1) };
 }
 
@@ -141,16 +147,24 @@ function writeBlockFile(file: string, header = "") {
 
 // The Claude Code hook that reports which files the agent edits, so the board can show who is
 // touching what. It only sends paths, and never stops an edit.
-export const TOUCH_HOOK_COMMAND = "npx -y hacky-mcp-server touch";
+export const TOUCH_HOOK_COMMAND = `npx -y ${SERVER_PACKAGE} touch`;
+const isTouchHook = (command: string | undefined) => /hacky-mcp-server(@\S+)? touch/.test(command ?? "");
 const TOUCH_HOOK_MATCHER = "Edit|Write|MultiEdit|NotebookEdit";
 
 type HookGroup = { matcher?: string; hooks?: { type?: string; command?: string }[] };
 
-// Adds the hook to the settings once, next to any hooks the person already has.
+// Adds the hook to the settings once, next to any hooks the person already has. A hook from an
+// older version is moved to this version's command in place.
 export function withTouchHook(settings: Record<string, any>): Record<string, any> {
   const groups: HookGroup[] = settings.hooks?.PostToolUse ?? [];
-  const present = groups.some((group) => group.hooks?.some((hook) => hook.command?.includes("hacky-mcp-server touch")));
-  if (present) return settings;
+  const present = groups.some((group) => group.hooks?.some((hook) => isTouchHook(hook.command)));
+  if (present) {
+    const updated = groups.map((group) => ({
+      ...group,
+      hooks: group.hooks?.map((hook) => (isTouchHook(hook.command) ? { ...hook, command: TOUCH_HOOK_COMMAND } : hook)),
+    }));
+    return { ...settings, hooks: { ...settings.hooks, PostToolUse: updated } };
+  }
   const group = { matcher: TOUCH_HOOK_MATCHER, hooks: [{ type: "command", command: TOUCH_HOOK_COMMAND, timeout: 15 }] };
   return { ...settings, hooks: { ...settings.hooks, PostToolUse: [...groups, group] } };
 }
@@ -209,7 +223,29 @@ export function managedBlockIsCurrent(dir: string): boolean {
     if (end <= start || text.slice(start, end + BLOCK_END.length) !== MANAGED_BLOCK) return false;
     current = true;
   }
-  return current;
+  return current && serverIsCurrent(dir);
+}
+
+// Whether every tool config that starts Hacky starts this version, and the Claude hook does too.
+function serverIsCurrent(dir: string): boolean {
+  for (const file of [join(dir, ".mcp.json"), join(dir, ".cursor", "mcp.json")]) {
+    let entry: { args?: unknown } | undefined;
+    try {
+      entry = readJson(file).mcpServers?.[SERVER_NAME];
+    } catch {
+      continue;
+    }
+    if (entry && !(Array.isArray(entry.args) && entry.args.includes(SERVER_PACKAGE))) return false;
+  }
+  const codex = readText(join(dir, ".codex", "config.toml"));
+  if (codex.includes("hacky-mcp-server") && !codex.includes(SERVER_PACKAGE)) return false;
+  try {
+    const groups: HookGroup[] = readJson(join(dir, ".claude", "settings.local.json")).hooks?.PostToolUse ?? [];
+    if (groups.some((group) => group.hooks?.some((hook) => isTouchHook(hook.command) && hook.command !== TOUCH_HOOK_COMMAND))) return false;
+  } catch {
+    // A broken settings file is reported when connecting.
+  }
+  return true;
 }
 
 // The team a folder is connected to, from whichever tool's config holds Hacky.

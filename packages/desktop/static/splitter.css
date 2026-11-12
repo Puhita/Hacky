@@ -1,0 +1,10 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+#root { position: relative; height: 100%; cursor: col-resize; touch-action: none; background: var(--vscode-sideBar-background); }
+/* A one-pixel line in the middle of the handle, brighter on hover and while dragging. */
+#root::after { content: ""; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--vscode-panel-border); transition: background 0.1s; }
+#root:hover::after, #root:focus-visible::after { left: 1px; width: 3px; background: var(--vscode-focusBorder); }
+#root:focus-visible { outline: none; }
+/* While dragging, this view covers the whole window and must not hide it. */
+body.dragging #root { background: transparent; }
+body.dragging #root::after { display: none; }
+body.dragging { cursor: col-resize; }

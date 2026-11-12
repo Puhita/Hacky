@@ -8,7 +8,8 @@ body { display: flex; flex-direction: column; font: var(--vscode-font-size) var(
 .tab.on { border-color: var(--vscode-focusBorder); }
 .tab.ended .name { color: var(--vscode-descriptionForeground); }
 button, select { font: inherit; color: var(--vscode-foreground); background: transparent; border: 0; cursor: pointer; }
-.name { padding: 3px 8px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tab, .new, select { min-height: 26px; max-width: 100%; }
+.name { padding: 3px 8px; max-width: min(220px, 60vw); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .x { padding: 3px 6px; color: var(--vscode-descriptionForeground); }
 .x:hover { color: var(--vscode-foreground); }
 select { border: 1px solid var(--vscode-widget-border); border-radius: 4px; padding: 3px 6px; background: var(--vscode-input-background); }

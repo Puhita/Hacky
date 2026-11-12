@@ -47,3 +47,14 @@ body { margin: 0; padding: 0; font: var(--vscode-font-size, 13px)/1.45 var(--vsc
 .hk .badge { font-size: 11px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 10px; color: var(--dim); white-space: nowrap; }
 .hk .badge.current { border-color: var(--ok); }
 .hk .badge.outdated { border-color: var(--warn); }
+
+/* ---- Adaptive layout ---- */
+.hk .page { overflow-wrap: anywhere; }
+.hk .lookup, .hk .row { flex-wrap: wrap; }
+.hk input[type="url"] { flex: 1 1 200px; min-height: 30px; }
+.hk .btn { min-height: 30px; }
+.hk .skill-text { max-height: min(320px, 50vh); }
+@media (max-width: 420px) {
+  .hk .page { padding: 14px 12px 28px; gap: 12px; }
+  .hk .lookup .btn { flex: 1 1 auto; }
+}

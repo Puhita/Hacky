@@ -3,25 +3,46 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { defaultCredentialsFile } from "hacky-mcp-server/credentials";
-import { app, BaseWindow, dialog, ipcMain, Menu, nativeImage, Notification, protocol, Tray, WebContentsView } from "electron";
+import { app, BaseWindow, dialog, ipcMain, Menu, nativeImage, Notification, protocol, shell, Tray, WebContentsView } from "electron";
 import { confirmationUrl, HackyApi } from "../../extension/src/api.js";
 import { attentionCount, statusText } from "../../extension/src/attention.js";
 import { folderStatus, SidebarController, type SidebarState } from "../../extension/src/controller.js";
-import { addFolder, assetPath, contentType, PAGE_NAMES, pageHtml, parseMessage, parseTerminalOpen, removeFolder, type PageName, type Tab } from "./host.js";
+import {
+  addFolder,
+  assetPath,
+  collapsesAt,
+  contentType,
+  PAGE_NAMES,
+  pageHtml,
+  parseMessage,
+  parseTerminalOpen,
+  RAIL_WIDTH,
+  removeFolder,
+  sidebarWidth,
+  SPLITTER_WIDTH,
+  startsCollapsed,
+  type PageName,
+  type Tab,
+} from "./host.js";
 import { runSmoke } from "./smoke.js";
 import { Terminals } from "./terminals.js";
 import { installUpdateNow, startUpdates } from "./updater.js";
 
 declare const __SUPABASE_URL__: string;
 declare const __SUPABASE_PUBLISHABLE_KEY__: string;
+declare const __GITHUB_CLIENT_ID__: string;
 
-const SIDEBAR_WIDTH = 380;
 const TAB_BAR_HEIGHT = 40;
+// A drag the screen stopped reporting (it lost the mouse some way we didn't hear about) ends by itself.
+const DRAG_TIMEOUT_MS = 4000;
+// Narrower than this, the sidebar hides by itself (see autoCollapse).
+const AUTO_COLLAPSE_WIDTH = 600;
 const smokeDir = process.env.HACKY_SMOKE_DIR;
 
 // The app's own settings. The sign-in itself is in the shared credentials file.
 // "folder" is the one the sidebar acts on; "folders" are all the connected project folders.
-type Settings = { teamId?: string; digestAt?: number; folder?: string; folders?: string[] };
+// "sidebarWidth" and "sidebarCollapsed" are how the person left the sidebar.
+type Settings = { teamId?: string; digestAt?: number; folder?: string; folders?: string[]; sidebarWidth?: number; sidebarCollapsed?: boolean };
 const settingsFile = () => join(app.getPath("userData"), "settings.json");
 let settings: Settings = {};
 function loadSettings(): void {
@@ -64,18 +85,126 @@ function showWindow(): void {
   win.focus();
 }
 
+// The sidebar: shown at the width the person chose, or hidden behind a narrow rail of icons.
+let sidebarCollapsed = false;
+// While the splitter is being dragged: where the sidebar's edge is now, in window coordinates.
+let dragX: number | undefined;
+let dragTimer: NodeJS.Timeout | undefined;
+let needsCount = 0;
+
 function layout(): void {
   if (!win) return;
   const { width, height } = win.getContentBounds();
-  const side = Math.min(SIDEBAR_WIDTH, Math.floor(width / 2));
+  // Too narrow for the sidebar and a screen side by side: the shown sidebar takes the window,
+  // next to the rail, whose buttons hide it again or go straight to a screen.
+  if (!sidebarCollapsed && width < AUTO_COLLAPSE_WIDTH) {
+    views.sidebar.setVisible(true);
+    views.rail.setVisible(true);
+    views.splitter.setVisible(false);
+    views.rail.setBounds({ x: 0, y: 0, width: RAIL_WIDTH, height });
+    views.sidebar.setBounds({ x: RAIL_WIDTH, y: 0, width: width - RAIL_WIDTH, height });
+    const away = { x: width, y: 0, width: 0, height: 0 };
+    for (const name of ["tabs", "board", "map", "skills", "git", "terminal"] as const) views[name].setBounds(away);
+    return;
+  }
+  const side = sidebarCollapsed ? RAIL_WIDTH : sidebarWidth(width, dragX ?? settings.sidebarWidth);
+  views.sidebar.setVisible(!sidebarCollapsed);
+  views.rail.setVisible(sidebarCollapsed);
+  views.splitter.setVisible(!sidebarCollapsed);
   views.sidebar.setBounds({ x: 0, y: 0, width: side, height });
-  views.tabs.setBounds({ x: side, y: 0, width: width - side, height: TAB_BAR_HEIGHT });
-  const content = { x: side, y: TAB_BAR_HEIGHT, width: width - side, height: height - TAB_BAR_HEIGHT };
+  views.rail.setBounds({ x: 0, y: 0, width: RAIL_WIDTH, height });
+  // While dragged, the splitter covers the whole window (it is see-through then), so the mouse
+  // can't leave it however fast it moves; the rest of the time it is the thin strip at the edge.
+  views.splitter.setBounds(dragX === undefined ? { x: side, y: 0, width: SPLITTER_WIDTH, height } : { x: 0, y: 0, width, height });
+  const left = sidebarCollapsed ? side : side + SPLITTER_WIDTH;
+  views.tabs.setBounds({ x: left, y: 0, width: width - left, height: TAB_BAR_HEIGHT });
+  const content = { x: left, y: TAB_BAR_HEIGHT, width: width - left, height: height - TAB_BAR_HEIGHT };
   views.board.setBounds(content);
   views.map.setBounds(content);
   views.skills.setBounds(content);
   views.git.setBounds(content);
   views.terminal.setBounds(content);
+}
+
+// What the tab bar, the rail and the splitter show: the open tab, whether the sidebar is hidden,
+// and how many things need the person.
+function sendChrome(): void {
+  const chrome = { activeTab, sidebarCollapsed, needs: needsCount, dragging: dragX !== undefined };
+  for (const name of ["tabs", "rail", "splitter"] as const) views[name]?.webContents.send("hacky:state", chrome);
+}
+
+// A window too narrow for the sidebar and a screen side by side hides the sidebar by itself, and
+// shows it again once the window is wide enough, unless the person hid or showed it in between.
+let autoCollapsed = false;
+let wasNarrow = false;
+function autoCollapse(): boolean {
+  if (!win) return false;
+  const narrow = win.getContentBounds().width < AUTO_COLLAPSE_WIDTH;
+  const before = sidebarCollapsed;
+  if (narrow && !wasNarrow && !sidebarCollapsed) {
+    sidebarCollapsed = true;
+    autoCollapsed = true;
+  } else if (!narrow && autoCollapsed) {
+    sidebarCollapsed = false;
+    autoCollapsed = false;
+  }
+  wasNarrow = narrow;
+  return before !== sidebarCollapsed;
+}
+
+function setSidebarCollapsed(collapsed: boolean): void {
+  endDrag(false);
+  autoCollapsed = false;
+  sidebarCollapsed = collapsed;
+  saveSettings({ sidebarCollapsed: collapsed });
+  layout();
+  sendChrome();
+}
+
+function windowX(screenX: number): number {
+  return win ? Math.round(screenX - win.getContentBounds().x) : screenX;
+}
+
+// Where in the handle the mouse went down, so the edge doesn't jump to the pointer.
+let dragOffset = 0;
+
+function startDrag(screenX: number): void {
+  if (!win || sidebarCollapsed) return;
+  dragOffset = windowX(screenX) - sidebarWidth(win.getContentBounds().width, settings.sidebarWidth);
+  moveDrag(screenX);
+}
+
+function moveDrag(screenX: number): void {
+  if (!win || sidebarCollapsed) return;
+  dragX = windowX(screenX) - dragOffset;  clearTimeout(dragTimer);
+  dragTimer = setTimeout(() => endDrag(true), DRAG_TIMEOUT_MS);
+  layout();
+}
+
+// Ends a drag. Dropped far to the left, the sidebar hides; anywhere else it keeps that width.
+function endDrag(keep: boolean, screenX?: number): void {
+  clearTimeout(dragTimer);
+  dragTimer = undefined;
+  if (dragX === undefined) return;
+  const x = screenX === undefined ? dragX : windowX(screenX) - dragOffset;
+  dragX = undefined;
+  if (keep && win) {
+    if (collapsesAt(x)) {
+      sidebarCollapsed = true;
+      saveSettings({ sidebarCollapsed: true });
+    } else {
+      saveSettings({ sidebarWidth: sidebarWidth(win.getContentBounds().width, x) });
+    }
+  }
+  layout();
+  sendChrome();
+}
+
+function nudgeSidebar(by: number): void {
+  if (!win || sidebarCollapsed) return;
+  const width = win.getContentBounds().width;
+  saveSettings({ sidebarWidth: sidebarWidth(width, sidebarWidth(width, settings.sidebarWidth) + by) });
+  layout();
 }
 
 let activeTab: Tab = "board";
@@ -86,7 +215,18 @@ function showTab(tab: Tab): void {
   views.skills.setVisible(tab === "skills");
   views.git.setVisible(tab === "git");
   views.terminal.setVisible(tab === "terminal");
-  views.tabs.webContents.send("hacky:state", { activeTab: tab });
+  sendChrome();
+}
+
+// Shows a screen the person asked for. In a narrow window the sidebar covers the screens, so it
+// hides until the window is wide enough again.
+function revealTab(tab: Tab): void {
+  if (!sidebarCollapsed && win && win.getContentBounds().width < AUTO_COLLAPSE_WIDTH) {
+    sidebarCollapsed = true;
+    autoCollapsed = true;
+    layout();
+  }
+  showTab(tab);
 }
 
 function showAttention(state: SidebarState): void {
@@ -96,12 +236,16 @@ function showAttention(state: SidebarState): void {
 }
 
 function createWindow(): void {
-  win = new BaseWindow({ width: 1280, height: 820, minWidth: 760, minHeight: 480, title: "Hacky", icon: distFile("icon.png"), backgroundColor: "#1e1e1e" });
+  win = new BaseWindow({ width: 1280, height: 820, minWidth: 360, minHeight: 400, title: "Hacky", icon: distFile("icon.png"), backgroundColor: "#1e1e1e" });
+  sidebarCollapsed = startsCollapsed(win.getContentBounds().width, settings.sidebarCollapsed);
+  autoCollapse();
   for (const name of PAGE_NAMES) {
     const view = new WebContentsView({
-      webPreferences: { preload: distFile("preload.cjs"), sandbox: true, contextIsolation: true, nodeIntegration: false },
+      // A test run keeps painting while its window is covered, or its screenshots wait forever for a frame.
+      webPreferences: { preload: distFile("preload.cjs"), sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: !smokeDir },
     });
-    view.setBackgroundColor("#1e1e1e");
+    // The splitter is see-through while dragged, so the screens show under it.
+    view.setBackgroundColor(name === "splitter" ? "#00000000" : "#1e1e1e");
     // A screen never navigates away or opens windows of its own.
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     view.webContents.on("will-navigate", (event) => event.preventDefault());
@@ -111,7 +255,12 @@ function createWindow(): void {
   }
   layout();
   showTab("board");
-  win.on("resize", layout);
+  win.on("resize", () => {
+    if (autoCollapse()) sendChrome();
+    layout();
+  });
+  // A drag never outlives the window losing focus.
+  win.on("blur", () => endDrag(true));
   win.on("close", (event) => {
     if (quitting) return;
     event.preventDefault();
@@ -149,6 +298,11 @@ function createController(): SidebarController {
   api = new HackyApi(__SUPABASE_URL__, __SUPABASE_PUBLISHABLE_KEY__, defaultCredentialsFile(), confirmationUrl("hacky"));
   return new SidebarController({
     api,
+    // The person's own GitHub token stays in the app's folder on this computer.
+    githubTokenFile: join(app.getPath("userData"), "github-token"),
+    openExternal: (url) => void shell.openExternal(url),
+    // Sign in with GitHub through the device flow. Empty when the build has no OAuth App client ID.
+    githubClientId: __GITHUB_CLIENT_ID__ || undefined,
     supabaseUrl: __SUPABASE_URL__,
     publishableKey: __SUPABASE_PUBLISHABLE_KEY__,
     workspaceDir: () => settings.folder ?? null,
@@ -165,6 +319,8 @@ function createController(): SidebarController {
       const data = { ...state, folder: settings.folder ? basename(settings.folder) : null, folders };
       for (const name of ["sidebar", "board", "map", "skills", "git", "terminal"] as const) views[name].webContents.send("hacky:state", data);
       showAttention(state);
+      needsCount = state.user && state.team ? attentionCount(state) : 0;
+      sendChrome();
     },
     digestMinutes: () => 30,
     loadDigestAt: () => settings.digestAt,
@@ -175,19 +331,19 @@ function createController(): SidebarController {
       notification.show();
     },
     openMap: () => {
-      showTab("map");
+      revealTab("map");
       showWindow();
     },
     openBoard: () => {
-      showTab("board");
+      revealTab("board");
       showWindow();
     },
     openSkills: () => {
-      showTab("skills");
+      revealTab("skills");
       showWindow();
     },
     openGit: () => {
-      showTab("git");
+      revealTab("git");
       showWindow();
     },
   });
@@ -218,13 +374,19 @@ async function dropFolder(path: string): Promise<void> {
 function handleMessage(raw: unknown): void {
   const parsed = parseMessage(raw);
   if (!parsed) return;
-  if (parsed.kind === "showTab") showTab(parsed.tab);
+  if (parsed.kind === "showTab") revealTab(parsed.tab);
   else if (parsed.kind === "chooseFolder") void chooseFolder();
   else if (parsed.kind === "connectFolder") void connectFolder(parsed.path, parsed.editors);
   else if (parsed.kind === "removeFolder") void dropFolder(parsed.path);
-  else {
+  else if (parsed.kind === "setSidebarCollapsed") setSidebarCollapsed(parsed.collapsed);
+  else if (parsed.kind === "sidebarNudge") nudgeSidebar(parsed.by);
+  else if (parsed.kind === "sidebarDrag") {
+    if (parsed.phase === "start") startDrag(parsed.screenX);
+    else if (parsed.phase === "move") moveDrag(parsed.screenX);
+    else endDrag(true, parsed.screenX);
+  } else {
     // A screen that has just loaded missed which tab is showing.
-    if (parsed.message.type === "ready") views.tabs.webContents.send("hacky:state", { activeTab });
+    if (parsed.message.type === "ready") sendChrome();
     void controller?.handle(parsed.message);
   }
 }

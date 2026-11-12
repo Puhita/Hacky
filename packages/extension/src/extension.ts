@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { join } from "node:path";
 import { defaultCredentialsFile } from "hacky-mcp-server/credentials";
 import * as vscode from "vscode";
 import { confirmationUrl, HackyApi } from "./api.js";
@@ -80,6 +81,14 @@ class HackyUi {
       openBoard: () => this.openBoard(),
       openSkills: () => this.openSkills(),
       openGit: () => this.openGit(),
+      // The person's own GitHub token stays in VS Code's storage folder for this extension.
+      githubTokenFile: join(this.context.globalStorageUri.fsPath, "github-token"),
+      openExternal: (url) => void vscode.env.openExternal(vscode.Uri.parse(url)),
+      // VS Code's own GitHub sign-in: no app of Hacky's own to register, and the person approves it in VS Code.
+      githubSignIn: async () => {
+        const session = await vscode.authentication.getSession("github", ["repo", "read:user"], { createIfNone: true });
+        return session ? { token: session.accessToken, login: session.account.label } : null;
+      },
     });
   }
 
