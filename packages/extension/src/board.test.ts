@@ -72,11 +72,11 @@ test("asks to log in before there is a team to show", () => {
   assert.equal(root.querySelectorAll("button").length, 0);
 });
 
-test("shows six tabs with counts of what needs attention", () => {
+test("shows seven tabs with counts of what needs attention", () => {
   const { send, root } = mount();
   send(STATE);
   const tabs = [...root.querySelectorAll('[role="tab"]')].map((node: any) => node.textContent);
-  assert.deepEqual(tabs, ["Tasks2", "Messages3", "Team", "Project", "Files", "Activity"]);
+  assert.deepEqual(tabs, ["Tasks2", "Sprints", "Messages3", "Team", "Project", "Files", "Activity"]);
 });
 
 test("the Tasks tab groups tasks by status, and adds a task", () => {
@@ -409,4 +409,125 @@ test("file names are shown as text, never as HTML", () => {
   click("Files");
   assert.equal(root.querySelectorAll("img").length, 0);
   assert.ok([...root.querySelectorAll(".fname")].some((node: any) => node.textContent.includes("<img")));
+});
+
+const SPRINT = { id: "s1", name: "Sprint 1", goal: "Login works", startsOn: "2026-11-10", endsOn: "2099-11-24", status: "active", createdBy: "Alice", startedAt: "2026-11-10T08:00:00Z", closedAt: null, record: null, createdAt: "2026-11-09T08:00:00Z" };
+const SPRINT_TASKS = [
+  { id: "1", title: "Plan it", status: "todo", files: [], owner: null, sprintId: null },
+  { id: "2", title: "Build it", status: "in_progress", files: [], owner: "Bob", sprintId: "s1" },
+  { id: "3", title: "Ship it", status: "done", files: [], owner: "Alice", sprintId: "s1" },
+];
+const SPRINTS = [
+  SPRINT,
+  { ...SPRINT, id: "s2", name: "Sprint 2", goal: "", status: "planned", startsOn: null, endsOn: null, startedAt: null },
+  {
+    ...SPRINT,
+    id: "s0",
+    name: "Sprint 0",
+    status: "closed",
+    endsOn: "2026-11-09",
+    closedAt: "2026-11-09T18:00:00Z",
+    record: {
+      done: [{ id: "9", title: "Set up repo", owner: "Alice", area: "code" }],
+      unfinished: [{ id: "8", title: "Write docs", owner: null, area: null, status: "in_progress" }],
+      progress: [{ summary: "Repo is up", author: "Alice", at: "2026-11-09T12:00:00Z", task: "Set up repo" }],
+    },
+  },
+];
+
+test("the Sprints tab shows the running sprint with its progress, the planned ones and the backlog", () => {
+  const { send, root, click } = mount();
+  send({ ...STATE, tasks: SPRINT_TASKS, sprints: SPRINTS });
+  const tab = [...root.querySelectorAll('[role="tab"]')].find((node: any) => node.textContent.startsWith("Sprints")) as any;
+  assert.equal(tab.textContent, "Sprints1", "one unfinished task in the running sprint");
+  click("Sprints");
+  const running = root.querySelector(".sprint");
+  assert.match(running.textContent, /Sprint 1/);
+  assert.match(running.textContent, /Login works/);
+  assert.match(running.textContent, /1 of 2 tasks done/);
+  assert.match(running.textContent, /days left/);
+  assert.equal(running.querySelector('[role="progressbar"]').getAttribute("aria-valuenow"), "1");
+  assert.match(root.textContent, /Planned/);
+  assert.match(root.textContent, /Close the running sprint to start this one/);
+  const backlog = [...root.querySelectorAll(".grp")].find((node: any) => node.textContent.startsWith("Backlog")) as any;
+  assert.deepEqual([...backlog.querySelectorAll(".srow .grow")].map((node: any) => node.textContent), ["Plan it"]);
+});
+
+test("sprints are planned, filled, started and closed from the Sprints tab", () => {
+  const { sent, send, root, click, window } = mount();
+  send({ ...STATE, tasks: SPRINT_TASKS, sprints: SPRINTS });
+  click("Sprints");
+  click("Plan sprint");
+  assert.equal(sent.length, 1, "a sprint needs a name");
+  root.querySelector("#sprint-name").value = "Sprint 3";
+  root.querySelector("#sprint-start").value = "2026-12-01";
+  root.querySelector("#sprint-end").value = "2026-12-14";
+  root.querySelector("#sprint-goal").value = "Payments";
+  click("Plan sprint");
+  assert.deepEqual(sent.at(-1), { type: "addSprint", name: "Sprint 3", goal: "Payments", startsOn: "2026-12-01", endsOn: "2026-12-14" });
+
+  const move = root.querySelector('[aria-label="Add to sprint: Plan it"]');
+  move.value = "s2";
+  move.dispatchEvent(new window.Event("change"));
+  assert.deepEqual(sent.at(-1), { type: "setTaskSprint", taskId: "1", sprintId: "s2" });
+
+  const running = root.querySelector(".sprint");
+  [...running.querySelectorAll("button")].find((node: any) => node.textContent === "Remove").click();
+  assert.deepEqual(sent.at(-1), { type: "setTaskSprint", taskId: "2", sprintId: null });
+
+  click("Close sprint");
+  assert.deepEqual(sent.at(-1), { type: "closeSprint", sprintId: "s1" });
+  root.querySelector("#carry-to").value = "s2";
+  click("Close sprint");
+  assert.deepEqual(sent.at(-1), { type: "closeSprint", sprintId: "s1", carryTo: "s2" });
+
+  click("Delete sprint");
+  assert.deepEqual(sent.at(-1), { type: "deleteSprint", sprintId: "s2" });
+
+  send({ ...STATE, tasks: SPRINT_TASKS, sprints: SPRINTS.filter((sprint) => sprint.status !== "active") });
+  click("Start sprint");
+  assert.deepEqual(sent.at(-1), { type: "startSprint", sprintId: "s2" });
+});
+
+test("a past sprint shows what was done, what wasn't, and the progress logged", () => {
+  const { send, root, click } = mount();
+  send({ ...STATE, tasks: SPRINT_TASKS, sprints: SPRINTS });
+  click("Sprints");
+  click("Sprint 0");
+  const past = [...root.querySelectorAll(".card")].find((node: any) => node.textContent.includes("Sprint 0")) as any;
+  assert.match(past.textContent, /1 of 2 tasks done/);
+  assert.match(past.textContent, /Done \(1\)Set up repo/);
+  assert.match(past.textContent, /Not finished \(1\)Write docs/);
+  assert.match(past.textContent, /in progress/);
+  assert.match(past.textContent, /Alice Repo is up/);
+});
+
+test("the Tasks tab labels tasks with their sprint and can add a task straight into one", () => {
+  const { sent, send, root, click } = mount();
+  send({ ...STATE, tasks: SPRINT_TASKS, sprints: SPRINTS });
+  assert.deepEqual([...root.querySelectorAll(".stag")].map((node: any) => node.textContent), ["Sprint 1", "Sprint 1"]);
+  root.querySelector("#new-task").value = "Fix login";
+  root.querySelector("#new-task-sprint").value = "s1";
+  click("Add task");
+  assert.deepEqual(sent.at(-1), { type: "addTask", title: "Fix login", sprintId: "s1" });
+});
+
+test("without sprints the Tasks tab has no sprint picker and the Sprints tab invites planning one", () => {
+  const { send, root, click } = mount();
+  send(STATE);
+  assert.equal(root.querySelector("#new-task-sprint"), null);
+  click("Sprints");
+  assert.match(root.textContent, /No finished sprints yet/);
+  assert.equal(root.querySelector(".sprint"), null);
+});
+
+test("sprint names and records from teammates are shown as text, never as HTML", () => {
+  const { send, root, click } = mount();
+  const evil = '<img src=x onerror="alert(1)">';
+  const record = { done: [{ id: "9", title: evil, owner: evil, area: null }], unfinished: [], progress: [{ summary: evil, author: evil, at: "2026-11-09T12:00:00Z", task: evil }] };
+  send({ ...STATE, tasks: SPRINT_TASKS, sprints: [{ ...SPRINT, name: evil, goal: evil }, { ...SPRINTS[2], name: evil, goal: evil, record }] });
+  click("Sprints");
+  click("<img");
+  assert.equal(root.querySelectorAll("img").length, 0);
+  assert.ok(root.querySelector(".sprint h2").textContent.includes("<img"));
 });

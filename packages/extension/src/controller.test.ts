@@ -373,6 +373,63 @@ test("the project page: the overview is saved without secrets, ideas and bugs ar
   assert.equal(alice.last().project.items.find((item) => item.id === idea.id)!.status, "dropped");
 });
 
+test("sprints: planned, filled, started, closed with a record of what was done, unfinished work carried over", async () => {
+  const teamId = alice.last().team!.id;
+  await alice.controller.handle({ type: "addSprint", name: "  ", goal: "" });
+  assert.ok(alice.last().error, "a sprint needs a name");
+  await alice.controller.handle({ type: "addSprint", name: "Sprint A", goal: "Login works", startsOn: "2026-11-14", endsOn: "2026-11-01" });
+  assert.ok(alice.last().error, "it can't end before it starts");
+  await alice.controller.handle({ type: "addSprint", name: "Sprint A", goal: "Login works", startsOn: "2026-11-14", endsOn: "2026-11-28" });
+  await alice.controller.handle({ type: "addSprint", name: "Sprint B" });
+  assert.equal(alice.last().error, null);
+  const sprintA = alice.last().sprints.find((sprint) => sprint.name === "Sprint A")!;
+  const sprintB = alice.last().sprints.find((sprint) => sprint.name === "Sprint B")!;
+  assert.equal(sprintA.status, "planned");
+  assert.equal(sprintA.createdBy, "Alice");
+  assert.equal(sprintA.endsOn, "2026-11-28");
+
+  await alice.controller.handle({ type: "addTask", title: "Sprint task done", sprintId: sprintA.id });
+  await alice.controller.handle({ type: "addTask", title: "Sprint task open" });
+  const open = alice.last().tasks.find((task) => task.title === "Sprint task open")!;
+  const finished = alice.last().tasks.find((task) => task.title === "Sprint task done")!;
+  assert.equal(finished.sprintId, sprintA.id, "a task can be added straight into a sprint");
+  assert.equal(open.sprintId, null);
+  await alice.controller.handle({ type: "setTaskSprint", taskId: open.id, sprintId: sprintA.id });
+  assert.equal(alice.last().tasks.find((task) => task.id === open.id)!.sprintId, sprintA.id);
+
+  await alice.controller.handle({ type: "startSprint", sprintId: sprintA.id });
+  assert.equal(alice.last().error, null);
+  assert.equal(alice.last().sprints[0].id, sprintA.id, "the running sprint comes first");
+  assert.equal(alice.last().sprints[0].status, "active");
+  await alice.controller.handle({ type: "startSprint", sprintId: sprintB.id });
+  assert.ok(alice.last().error, "only one sprint runs at a time");
+  await alice.controller.handle({ type: "deleteSprint", sprintId: sprintA.id });
+  assert.ok(alice.last().error, "a started sprint can't be deleted");
+
+  const { data: member } = await admin.from("members").select("user_id").eq("team_id", teamId).eq("role", "member").single();
+  assert.ifError((await admin.from("tasks").update({ status: "done" }).eq("id", finished.id)).error);
+  assert.ifError((await admin.from("events").insert({ team_id: teamId, user_id: member!.user_id, task_id: finished.id, summary: "Finished the sprint task" })).error);
+
+  await alice.controller.handle({ type: "closeSprint", sprintId: sprintA.id, carryTo: sprintB.id });
+  assert.equal(alice.last().error, null);
+  const closed = alice.last().sprints.find((sprint) => sprint.id === sprintA.id)!;
+  assert.equal(closed.status, "closed");
+  assert.ok(closed.closedAt);
+  assert.deepEqual(closed.record!.done.map((task) => task.title), ["Sprint task done"]);
+  assert.deepEqual(closed.record!.unfinished.map((task) => [task.title, task.status]), [["Sprint task open", "todo"]]);
+  assert.ok(closed.record!.progress.some((entry) => entry.summary === "Finished the sprint task" && entry.author === "Bob" && entry.task === "Sprint task done"));
+  const tasks = alice.last().tasks;
+  assert.equal(tasks.find((task) => task.id === open.id)!.sprintId, sprintB.id, "unfinished work moved to the next sprint");
+  assert.equal(tasks.find((task) => task.id === finished.id)!.sprintId, sprintA.id, "finished work stays in its sprint");
+
+  await alice.controller.handle({ type: "closeSprint", sprintId: sprintA.id });
+  assert.ok(alice.last().error, "a closed sprint can't be closed again");
+  await alice.controller.handle({ type: "deleteSprint", sprintId: sprintB.id });
+  assert.equal(alice.last().error, null);
+  assert.ok(!alice.last().sprints.some((sprint) => sprint.id === sprintB.id));
+  assert.equal(alice.last().tasks.find((task) => task.id === open.id)!.sprintId, null, "deleting a planned sprint puts its tasks back in the backlog");
+});
+
 test("the Files tab data: touches from the last week, with who touched them", async () => {
   const teamId = alice.last().team!.id;
   const { data: member } = await admin.from("members").select("user_id").eq("team_id", teamId).eq("role", "member").single();
