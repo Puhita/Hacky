@@ -18,6 +18,7 @@ import type {
   ProjectItemKind,
   ProjectItemStatus,
   ProjectState,
+  Sprint,
   BugSeverity,
 } from "./api.js";
 import { MIN_PASSWORD_LENGTH } from "./api.js";
@@ -119,6 +120,8 @@ export type SidebarState = {
   assumptions: PendingAssumption[];
   decisions: ActiveDecision[];
   tasks: BoardTask[];
+  // Sprints: running and planned first, then past ones with their record of what was done.
+  sprints: Sprint[];
   // The project page: shared overview, ideas and bugs.
   project: ProjectState;
   // Files agents reported editing in the last week.
@@ -149,7 +152,12 @@ export type Message =
   | { type: "rejectAssumption"; assumptionId: string; reason: string }
   | { type: "changeDecision"; decisionId: string; text: string }
   | { type: "withdrawDecision"; decisionId: string }
-  | { type: "addTask"; title: string; area?: TaskArea }
+  | { type: "addTask"; title: string; area?: TaskArea; sprintId?: string }
+  | { type: "addSprint"; name: string; goal?: string; startsOn?: string; endsOn?: string }
+  | { type: "startSprint"; sprintId: string }
+  | { type: "closeSprint"; sprintId: string; carryTo?: string }
+  | { type: "deleteSprint"; sprintId: string }
+  | { type: "setTaskSprint"; taskId: string; sprintId: string | null }
   | { type: "saveOverview"; idea: string; architecture: string }
   | { type: "addProjectItem"; kind: ProjectItemKind; title: string; details?: string; severity?: BugSeverity }
   | { type: "setProjectItemStatus"; itemId: string; status: ProjectItemStatus }
@@ -361,7 +369,28 @@ export class SidebarController {
         return;
       case "addTask":
         if (!this.teamId) throw new Error("Choose a team first.");
-        return api.addTask(this.teamId, message.title.trim(), message.area || undefined);
+        return api.addTask(this.teamId, message.title.trim(), message.area || undefined, message.sprintId || undefined);
+      case "addSprint":
+        if (!this.teamId) throw new Error("Choose a team first.");
+        await api.addSprint(this.teamId, message.name, message.goal ?? "", message.startsOn || undefined, message.endsOn || undefined);
+        this.notice = "Sprint planned. Add tasks to it, then start it.";
+        return;
+      case "startSprint":
+        await api.startSprint(message.sprintId);
+        this.notice = "Sprint started.";
+        return;
+      case "closeSprint":
+        await api.closeSprint(message.sprintId, message.carryTo || undefined);
+        this.notice = message.carryTo
+          ? "Sprint closed and saved. Unfinished tasks moved to the next sprint."
+          : "Sprint closed and saved. Unfinished tasks went back to the backlog.";
+        return;
+      case "deleteSprint":
+        await api.deleteSprint(message.sprintId);
+        this.notice = "Sprint deleted. Its tasks are back in the backlog.";
+        return;
+      case "setTaskSprint":
+        return api.setTaskSprint(message.taskId, message.sprintId);
       case "answerTeammate":
         await api.answerPeerQuestion(message.questionId, message.text.trim());
         this.notice = "Answer sent to your teammate's agent.";
@@ -791,6 +820,7 @@ export class SidebarController {
       assumptions: [],
       decisions: [],
       tasks: [],
+      sprints: [],
       project: { overview: { idea: "", architecture: "", updatedBy: null, updatedAt: null }, items: [] },
       fileTouches: [],
       feed: [],
@@ -836,6 +866,7 @@ export class SidebarController {
               api.teamMembers(state.team.id),
             ]);
           state.project = await api.projectState(state.team.id);
+          state.sprints = await api.sprints(state.team.id);
           state.fileTouches = await api.fileTouches(state.team.id);
           state.skills = await this.skillsState(state.team.id);
           state.github = await this.githubState(state.team.id, state.members);

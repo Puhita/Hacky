@@ -11,7 +11,7 @@
   // ---- Remembered choices ----
 
   const saved = vscode.getState() ?? {};
-  const TAB_IDS = ["tasks", "messages", "team", "project", "files", "activity"];
+  const TAB_IDS = ["tasks", "sprints", "messages", "team", "project", "files", "activity"];
   let tab = TAB_IDS.includes(saved.tab) ? saved.tab : "tasks";
   let messageFilter = saved.messageFilter === "all" ? "all" : "mine";
   let activityFilter = typeof saved.activityFilter === "string" ? saved.activityFilter : "";
@@ -65,6 +65,7 @@
     check: ["M3 8.5l3.2 3L13 4.5"],
     close: ["M4 4l8 8M12 4l-8 8"],
     plus: ["M8 3v10M3 8h10"],
+    sprint: ["M13.5 8A5.5 5.5 0 113.6 4.7", "M12.8 2.2v2.6h-2.6", "M8 5v3l2 1.5"],
   };
   function icon(name, className = "") {
     const attrs = { viewBox: "0 0 16 16", "aria-hidden": "true" };
@@ -205,10 +206,15 @@
     ["done", "Done", "done"],
   ];
 
-  function renderTask(task, kind, memberIndex) {
+  function renderTask(task, kind, memberIndex, sprintName) {
     return el("article", { class: "tc" }, [
       el("div", { class: "tc-top" }, [glyph(kind), el("span", { class: "hl cl2", text: task.title })]),
-      task.area ? el("div", { class: "files" }, [el("span", { class: `area area-${task.area}`, text: task.area })]) : null,
+      task.area || sprintName
+        ? el("div", { class: "files" }, [
+            task.area ? el("span", { class: `area area-${task.area}`, text: task.area }) : null,
+            sprintName ? el("span", { class: "stag tr", text: sprintName }) : null,
+          ])
+        : null,
       (task.files ?? []).length > 0 ? el("div", { class: "files" }, task.files.map((file) => el("span", { class: "file tr", text: file }))) : null,
       el("div", { class: "tc-foot" }, [
         task.owner
@@ -224,9 +230,19 @@
       el("option", { value: "", text: "No area" }),
       ...AREAS.map((name) => el("option", { value: name, text: name })),
     ]);
+    const sprints = state.sprints ?? [];
+    const openSprints = sprints.filter((sprint) => sprint.status !== "closed").sort((a, b) => (a.status === "active" ? -1 : b.status === "active" ? 1 : 0));
+    const sprintNames = new Map(sprints.map((sprint) => [sprint.id, sprint.name]));
+    const sprint =
+      openSprints.length > 0
+        ? el("select", { class: "in", id: "new-task-sprint", name: "sprint", "aria-label": "Sprint" }, [
+            el("option", { value: "", text: "Backlog" }),
+            ...openSprints.map((item) => el("option", { value: item.id, text: item.status === "active" ? `${item.name} (running)` : item.name })),
+          ])
+        : null;
     const add = () => {
       if (title.value.trim() === "") return;
-      vscode.postMessage({ type: "addTask", title: title.value, ...(area.value && { area: area.value }) });
+      vscode.postMessage({ type: "addTask", title: title.value, ...(area.value && { area: area.value }), ...(sprint && sprint.value && { sprintId: sprint.value }) });
     };
     title.onkeydown = (event) => event.key === "Enter" && add();
     const names = state.pulse.map((member) => member.name);
@@ -268,6 +284,7 @@
       el("div", { class: "addtask" }, [
         el("div", { class: "f1" }, [el("label", { for: "new-task", text: "New task" }), title]),
         el("div", {}, [el("label", { for: "new-task-area", text: "Area" }), area]),
+        sprint ? el("div", {}, [el("label", { for: "new-task-sprint", text: "Sprint" }), sprint]) : null,
         button("Add task", "cta", add, "plus"),
       ]),
       names.length > 1
@@ -286,7 +303,7 @@
           const tasks = shown.filter((task) => task.status === status);
           return el("section", { class: "col column" }, [
             el("div", { class: "col-h" }, [glyph(kind), el("span", { text: name }), count(tasks.length)]),
-            ...(tasks.length === 0 ? [empty("Nothing here.")] : tasks.map((task) => renderTask(task, kind, memberIndex))),
+            ...(tasks.length === 0 ? [empty("Nothing here.")] : tasks.map((task) => renderTask(task, kind, memberIndex, task.sprintId ? sprintNames.get(task.sprintId) : null))),
           ]);
         }),
       ),
@@ -959,10 +976,195 @@
     ]);
   }
 
+  // ---- Sprints ----
+
+  const STATUS_KIND = { todo: "idle", in_progress: "work", done: "done" };
+  const STATUS_LABEL = { todo: "to do", in_progress: "in progress", done: "done" };
+
+  function formatDay(day) {
+    if (!day) return "";
+    const date = new Date(`${day}T00:00:00`);
+    return Number.isNaN(date.getTime()) ? day : date.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+  }
+
+  function sprintDates(sprint) {
+    if (sprint.startsOn && sprint.endsOn) return `${formatDay(sprint.startsOn)} – ${formatDay(sprint.endsOn)}`;
+    if (sprint.startsOn) return `from ${formatDay(sprint.startsOn)}`;
+    if (sprint.endsOn) return `until ${formatDay(sprint.endsOn)}`;
+    return "No dates";
+  }
+
+  // Whole days left until the end date, today included. Negative once it is past.
+  function daysLeft(endsOn) {
+    if (!endsOn) return null;
+    const end = new Date(`${endsOn}T00:00:00`);
+    if (Number.isNaN(end.getTime())) return null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((end.getTime() - today.getTime()) / 86_400_000) + 1;
+  }
+
+  function progressBar(done, total) {
+    const pct = total === 0 ? 0 : Math.round((done / total) * 100);
+    const fill = el("i");
+    fill.style.width = `${pct}%`;
+    return el("div", { class: "sprog" }, [
+      el("div", { class: "sprog-bar", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(total), "aria-valuenow": String(done), "aria-label": `${done} of ${total} tasks done` }, [fill]),
+      el("span", { class: "muted", text: `${done} of ${plural(total, "task")} done` }),
+    ]);
+  }
+
+  function sprintTaskRow(task, memberIndex, actions) {
+    const kind = STATUS_KIND[task.status] ?? "idle";
+    return el("div", { class: "srow" }, [
+      glyph(kind),
+      el("span", { class: "grow cl2", text: task.title }),
+      task.area ? el("span", { class: `area area-${task.area}`, text: task.area }) : null,
+      task.owner ? el("span", { class: `av sm a${(memberIndex(task.owner) % 4) + 1}`, title: task.owner, text: initials(task.owner) }) : el("span", { class: "muted", text: "Unclaimed" }),
+      ...actions,
+    ]);
+  }
+
+  const removeButton = (task) => button("Remove", "sec", () => vscode.postMessage({ type: "setTaskSprint", taskId: task.id, sprintId: null }));
+
+  // A select that moves the task into a sprint as soon as one is picked.
+  function moveSelect(task, sprints) {
+    const select = el("select", { class: "in", "aria-label": `Add to sprint: ${task.title}` }, [
+      el("option", { value: "", text: "Add to sprint" }),
+      ...sprints.map((sprint) => el("option", { value: sprint.id, text: sprint.status === "active" ? `${sprint.name} (running)` : sprint.name })),
+    ]);
+    select.onchange = () => select.value && vscode.postMessage({ type: "setTaskSprint", taskId: task.id, sprintId: select.value });
+    return select;
+  }
+
+  function renderSprintForm() {
+    const field = (id, label, input, className = "") => el("div", { class: className }, [el("label", { for: id, text: label }), input]);
+    const name = el("input", { type: "text", class: "in", id: "sprint-name", name: "name", placeholder: "Sprint 1", maxlength: "120" });
+    const starts = el("input", { type: "date", class: "in", id: "sprint-start", name: "startsOn" });
+    const ends = el("input", { type: "date", class: "in", id: "sprint-end", name: "endsOn" });
+    const goal = el("textarea", { class: "in", id: "sprint-goal", name: "goal", "aria-label": "Sprint goal", placeholder: "Goal: what should be true when this sprint ends? (optional)", rows: "2" });
+    goal.value = drafts.get("sprint-goal") ?? "";
+    goal.oninput = () => drafts.set("sprint-goal", goal.value);
+    const add = () => {
+      if (name.value.trim() === "") return;
+      drafts.delete("sprint-goal");
+      vscode.postMessage({ type: "addSprint", name: name.value, goal: goal.value, ...(starts.value && { startsOn: starts.value }), ...(ends.value && { endsOn: ends.value }) });
+    };
+    name.onkeydown = (event) => event.key === "Enter" && add();
+    return el("section", { class: "sform" }, [
+      el("div", { class: "addtask" }, [field("sprint-name", "New sprint", name, "f1"), field("sprint-start", "Starts", starts), field("sprint-end", "Ends", ends), button("Plan sprint", "cta", add, "plus")]),
+      goal,
+    ]);
+  }
+
+  function renderActiveSprint(state, sprint, planned, memberIndex) {
+    const tasks = state.tasks.filter((task) => task.sprintId === sprint.id);
+    const done = tasks.filter((task) => task.status === "done").length;
+    const left = daysLeft(sprint.endsOn);
+    const timing = left === null ? "" : left < 1 ? ` · ended ${plural(1 - left, "day")} ago` : ` · ${plural(left, "day")} left`;
+    const carry = el("select", { class: "in", id: "carry-to", "aria-label": "Where unfinished tasks go" }, [
+      el("option", { value: "", text: "Unfinished tasks go back to the backlog" }),
+      ...planned.map((next) => el("option", { value: next.id, text: `Unfinished tasks move to ${next.name}` })),
+    ]);
+    const close = () => vscode.postMessage({ type: "closeSprint", sprintId: sprint.id, ...(carry.value && { carryTo: carry.value }) });
+    return el("section", { class: "sprint" }, [
+      el("div", { class: "bar" }, [
+        glyph("work"),
+        el("div", { class: "grow" }, [el("h2", { class: "cl2", text: sprint.name }), el("div", { class: "sub", text: `Running · ${sprintDates(sprint)}${timing}` })]),
+      ]),
+      sprint.goal ? el("p", { class: "sgoal", text: sprint.goal }) : null,
+      progressBar(done, tasks.length),
+      el(
+        "div",
+        { class: "kan" },
+        TASK_COLUMNS.map(([status, label, kind]) => {
+          const column = tasks.filter((task) => task.status === status);
+          return el("section", { class: "col column" }, [
+            el("div", { class: "col-h" }, [glyph(kind), el("span", { text: label }), count(column.length)]),
+            ...(column.length === 0 ? [empty("Nothing here.")] : column.map((task) => sprintTaskRow(task, memberIndex, status === "done" ? [] : [removeButton(task)]))),
+          ]);
+        }),
+      ),
+      el("div", { class: "row sclose" }, [carry, button("Close sprint", "cta", close, "check")]),
+    ]);
+  }
+
+  function renderPlannedSprint(state, sprint, canStart, memberIndex) {
+    const tasks = state.tasks.filter((task) => task.sprintId === sprint.id);
+    return foldCard(`sprint-${sprint.id}`, true, { kind: "wait", headline: sprint.name, meta: [document.createTextNode(`Planned · ${sprintDates(sprint)} · ${plural(tasks.length, "task")}`)] }, [
+      sprint.goal ? el("p", { class: "sgoal", text: sprint.goal }) : null,
+      tasks.length === 0 ? empty("No tasks yet. Add some from the backlog.") : el("div", { class: "slist" }, tasks.map((task) => sprintTaskRow(task, memberIndex, [removeButton(task)]))),
+      el("div", { class: "row" }, [
+        canStart ? button("Start sprint", "cta", () => vscode.postMessage({ type: "startSprint", sprintId: sprint.id })) : el("span", { class: "muted", text: "Close the running sprint to start this one." }),
+        button("Delete sprint", "sec", () => vscode.postMessage({ type: "deleteSprint", sprintId: sprint.id }), "close"),
+      ]),
+    ]);
+  }
+
+  function renderPastSprint(sprint, memberIndex) {
+    const record = sprint.record ?? { done: [], unfinished: [], progress: [] };
+    const total = record.done.length + record.unfinished.length;
+    const section = (title, items, draw) =>
+      items.length === 0 ? null : el("div", { class: "srec" }, [el("h3", { text: `${title} (${items.length})` }), el("div", { class: "slist" }, items.map(draw))]);
+    return foldCard(
+      `sprint-${sprint.id}`,
+      false,
+      {
+        kind: "done",
+        headline: sprint.name,
+        meta: [document.createTextNode(`${sprintDates(sprint)} · ${record.done.length} of ${plural(total, "task")} done${sprint.closedAt ? ` · closed ${age(sprint.closedAt)} ago` : ""}`)],
+      },
+      [
+        sprint.goal ? el("p", { class: "sgoal", text: sprint.goal }) : null,
+        progressBar(record.done.length, total),
+        section("Done", record.done, (task) => sprintTaskRow({ ...task, status: "done" }, memberIndex, [])),
+        section("Not finished", record.unfinished, (task) => sprintTaskRow(task, memberIndex, [el("span", { class: "muted", text: STATUS_LABEL[task.status] ?? "" })])),
+        section("Progress logged", record.progress, (entry) =>
+          el("div", { class: "srow log" }, [
+            el("span", { class: "grow" }, [el("b", { text: entry.author ?? "A teammate" }), document.createTextNode(` ${entry.summary}`), entry.task ? el("span", { class: "muted", text: ` · ${entry.task}` }) : null]),
+            el("span", { class: "muted", text: age(entry.at) }),
+          ]),
+        ),
+        total === 0 && record.progress.length === 0 ? empty("Nothing was recorded in this sprint.") : null,
+      ],
+    );
+  }
+
+  function renderSprints(state) {
+    const sprints = state.sprints ?? [];
+    const names = state.pulse.map((member) => member.name);
+    const memberIndex = (name) => Math.max(0, names.indexOf(name));
+    const active = sprints.find((sprint) => sprint.status === "active");
+    const planned = sprints.filter((sprint) => sprint.status === "planned");
+    const past = sprints.filter((sprint) => sprint.status === "closed");
+    const open = [active, ...planned].filter(Boolean);
+    const backlog = state.tasks.filter((task) => !task.sprintId && task.status !== "done");
+    return el("div", { class: "bc-in" }, [
+      el("div", { class: "bar" }, [
+        el("div", {}, [
+          el("h2", { text: "Sprints" }),
+          el("div", { class: "sub", text: "Plan a sprint, add tasks from the backlog, start it, and close it when it ends. Closing keeps a record of what was done." }),
+        ]),
+      ]),
+      renderSprintForm(),
+      active ? renderActiveSprint(state, active, planned, memberIndex) : null,
+      planned.length > 0 ? group("Planned", planned.length, planned.map((sprint) => renderPlannedSprint(state, sprint, !active, memberIndex))) : null,
+      open.length > 0
+        ? group("Backlog", backlog.length, [
+            backlog.length === 0
+              ? empty("Every open task is in a sprint.")
+              : el("div", { class: "slist" }, backlog.map((task) => sprintTaskRow(task, memberIndex, [moveSelect(task, open)]))),
+          ])
+        : null,
+      group("Past sprints", past.length, past.length === 0 ? [empty("No finished sprints yet. When you close one, what was done is kept here.")] : past.map((sprint) => renderPastSprint(sprint, memberIndex))),
+    ]);
+  }
+
   // ---- Page ----
 
   const TABS = [
     ["tasks", "Tasks", "board", renderTasks],
+    ["sprints", "Sprints", "sprint", renderSprints],
     ["messages", "Messages", "inbox", renderMessages],
     ["team", "Team", "team", renderTeam],
     ["project", "Project", "board", renderProject],
@@ -983,6 +1185,11 @@
       const open = (state.project?.items ?? []).filter((item) => item.status === "open" && item.kind === "bug").length;
       const mismatch = state.github?.check?.status === "mismatch" ? 1 : 0;
       return open + mismatch > 0 ? hex("needs", open + mismatch) : null;
+    }
+    if (id === "sprints") {
+      const active = (state.sprints ?? []).find((sprint) => sprint.status === "active");
+      const left = active ? state.tasks.filter((task) => task.sprintId === active.id && task.status !== "done").length : 0;
+      return left > 0 ? hex("", left) : null;
     }
     if (id === "team") return liveChats(state) > 0 ? el("i", { class: "pd live" }) : null;
     return null;

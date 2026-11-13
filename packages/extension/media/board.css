@@ -398,3 +398,26 @@ section.gh .gh-pick h3 { font-size: 12px; text-transform: uppercase; letter-spac
 section.gh .gh-pick ul { max-height: 260px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; }
 section.gh .gh-pick li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 5px 8px; border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); overflow-wrap: anywhere; }
 section.gh .gh-pick li:first-child { border-top: 0; }
+
+/* ---- Sprints ---- */
+.sform { display: flex; flex-direction: column; gap: 6px; margin: 12px 0 18px; }
+.sform textarea { width: 100%; resize: vertical; }
+.sprint { border: 1px solid var(--line); border-left: 3px solid var(--c-work); background: var(--card); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px; }
+.sprint .bar .gl { align-self: flex-start; margin-top: 4px; }
+.sgoal { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sprog { display: flex; align-items: center; gap: 10px; }
+.sprog-bar { flex: 1; max-width: 360px; height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--fg) 12%, transparent); overflow: hidden; }
+.sprog-bar i { display: block; height: 100%; background: var(--c-done); border-radius: 3px; transition: width 0.3s ease; }
+.slist { display: flex; flex-direction: column; gap: 6px; }
+.srow { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 7px 9px; }
+.srow .grow { min-width: 140px; }
+.srow.log { font-size: 12.5px; }
+.srow.log b { font-weight: 600; }
+.srec { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.srec h3 { font-size: 12px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; }
+.sclose { justify-content: flex-end; }
+.sclose select { max-width: 100%; }
+@media (prefers-reduced-motion: reduce) { .sprog-bar i { transition: none; } }
+.hk select.in { height: 30px; max-width: 100%; background: var(--vscode-dropdown-background, var(--vscode-input-background)); color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground)); border: 1px solid var(--vscode-dropdown-border, var(--line)); border-radius: 5px; padding: 0 6px; font: inherit; font-size: 12.5px; }
+.addtask select.in { height: 36px; }
+.stag { font-size: 11px; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--c-work); color: var(--dim); max-width: 100%; }

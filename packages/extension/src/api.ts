@@ -7,7 +7,7 @@ import type { Fingerprint, MemberFingerprint } from "./github.js";
 const FEED_LIMIT = 30;
 const DECISION_LIMIT = 50;
 const TASK_LIMIT = 200;
-const LIVE_TABLES = ["team_github", "project_fingerprints", "file_touches", "team_overview", "project_items", "events", "questions", "question_waiters", "decisions", "tasks", "assumptions", "agent_sessions", "peer_questions"];
+const LIVE_TABLES = ["sprints", "team_github", "project_fingerprints", "file_touches", "team_overview", "project_items", "events", "questions", "question_waiters", "decisions", "tasks", "assumptions", "agent_sessions", "peer_questions"];
 const PEER_THREAD_LIMIT = 20;
 // Matches the MCP server: a chat that hasn't touched Hacky for this long counts as idle.
 const ACTIVE_WINDOW_MS = 10 * 60_000;
@@ -44,7 +44,30 @@ export type PendingAssumption = { id: string; text: string; created_at: string; 
 export type ActiveDecision = { id: string; text: string; created_at: string; question: string | null; author: string };
 export const TASK_AREAS = ["art", "code", "design", "audio"] as const;
 export type TaskArea = (typeof TASK_AREAS)[number];
-export type BoardTask = { id: string; title: string; status: string; files: string[]; area: TaskArea | null; owner: string | null };
+export type BoardTask = { id: string; title: string; status: string; files: string[]; area: TaskArea | null; owner: string | null; sprintId: string | null };
+// Sprints: a planned stretch of work. A closed sprint keeps a record of what got done.
+export type SprintStatus = "planned" | "active" | "closed";
+export type SprintRecordTask = { id: string; title: string; owner: string | null; area: TaskArea | null; status?: string };
+export type SprintRecord = {
+  done: SprintRecordTask[];
+  unfinished: SprintRecordTask[];
+  progress: { summary: string; author: string | null; at: string; task: string | null }[];
+};
+export type Sprint = {
+  id: string;
+  name: string;
+  goal: string;
+  startsOn: string | null;
+  endsOn: string | null;
+  status: SprintStatus;
+  createdBy: string | null;
+  startedAt: string | null;
+  closedAt: string | null;
+  record: SprintRecord | null;
+  createdAt: string;
+};
+const SPRINT_LIMIT = 100;
+const isDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(value));
 // A file one person's agents edited recently, as reported by the Claude Code hook.
 export type FileTouch = { path: string; person: string; touches: number; lastAt: string };
 export const FILE_TOUCH_DAYS = 7;
@@ -457,15 +480,80 @@ export class HackyApi {
   }
 
   async tasks(teamId: string): Promise<BoardTask[]> {
-    const rows = unwrap(
-      await this.supabase
-        .from("tasks")
-        .select("id, title, status, files, area, members(display_name)")
-        .eq("team_id", teamId)
-        .order("created_at", { ascending: true })
-        .limit(TASK_LIMIT),
-    ) as unknown as (Omit<BoardTask, "owner"> & { members: { display_name: string } | null })[];
-    return rows.map(({ members, ...row }) => ({ ...row, owner: members?.display_name ?? null }));
+    const read = (columns: string) =>
+      this.supabase.from("tasks").select(columns).eq("team_id", teamId).order("created_at", { ascending: true }).limit(TASK_LIMIT);
+    let result = await read("id, title, status, files, area, sprint_id, members(display_name)");
+    // Older databases without sprints have no sprint_id column.
+    if (result.error?.code === "42703") result = await read("id, title, status, files, area, members(display_name)");
+    const rows = unwrap(result) as unknown as (Omit<BoardTask, "owner" | "sprintId"> & { sprint_id: string | null; members: { display_name: string } | null })[];
+    return rows.map(({ members, sprint_id, ...row }) => ({ ...row, owner: members?.display_name ?? null, sprintId: sprint_id ?? null }));
+  }
+
+  // The team's sprints, running and planned first, then past ones newest first.
+  async sprints(teamId: string): Promise<Sprint[]> {
+    const result = await this.supabase
+      .from("sprints")
+      .select("id, name, goal, starts_on, ends_on, status, created_by, started_at, closed_at, summary, created_at")
+      .eq("team_id", teamId)
+      .order("created_at", { ascending: false })
+      .limit(SPRINT_LIMIT);
+    // Older databases without the table have no sprints.
+    if (result.error?.code === "PGRST205") return [];
+    const [rows, names] = [unwrap(result), await this.memberNames(teamId)];
+    const order: Record<SprintStatus, number> = { active: 0, planned: 1, closed: 2 };
+    return rows
+      .map((row) => ({
+        id: row.id,
+        name: row.name,
+        goal: row.goal,
+        startsOn: row.starts_on,
+        endsOn: row.ends_on,
+        status: row.status as SprintStatus,
+        createdBy: row.created_by ? (names.get(row.created_by) ?? null) : null,
+        startedAt: row.started_at,
+        closedAt: row.closed_at,
+        record: (row.summary as SprintRecord | null) ?? null,
+        createdAt: row.created_at,
+      }))
+      .sort((a, b) => order[a.status] - order[b.status] || (a.status === "closed" ? (b.closedAt ?? "").localeCompare(a.closedAt ?? "") : 0));
+  }
+
+  async addSprint(teamId: string, name: string, goal: string, startsOn?: string, endsOn?: string): Promise<void> {
+    if (name.trim() === "") throw new Error("Give the sprint a name.");
+    for (const date of [startsOn, endsOn]) if (date && !isDate(date)) throw new Error(`Not a date: ${date}`);
+    if (startsOn && endsOn && endsOn < startsOn) throw new Error("The sprint can't end before it starts.");
+    const user = await this.currentUser();
+    if (!user) throw new Error("Log in first.");
+    unwrap(
+      await this.supabase.from("sprints").insert({
+        team_id: teamId,
+        name: redact(name.trim()).slice(0, 120),
+        goal: redact(goal.trim()).slice(0, 2000),
+        created_by: user.id,
+        ...(startsOn && { starts_on: startsOn }),
+        ...(endsOn && { ends_on: endsOn }),
+      }),
+    );
+  }
+
+  async startSprint(sprintId: string): Promise<void> {
+    unwrap(await this.supabase.rpc("start_sprint", { target_sprint: sprintId }));
+  }
+
+  // Saves what was done and moves unfinished tasks to carryTo, or back to the backlog.
+  async closeSprint(sprintId: string, carryTo?: string): Promise<void> {
+    unwrap(await this.supabase.rpc("close_sprint", { target_sprint: sprintId, carry_to: carryTo ?? null }));
+  }
+
+  // Only a sprint that never started can be deleted. Its tasks go back to the backlog.
+  async deleteSprint(sprintId: string): Promise<void> {
+    const deleted = unwrap(await this.supabase.from("sprints").delete().eq("id", sprintId).eq("status", "planned").select("id"));
+    if (deleted.length === 0) throw new Error("Only a sprint that hasn't started can be deleted.");
+  }
+
+  // Puts a task in a sprint, or back in the backlog with null.
+  async setTaskSprint(taskId: string, sprintId: string | null): Promise<void> {
+    unwrap(await this.supabase.from("tasks").update({ sprint_id: sprintId, updated_at: new Date().toISOString() }).eq("id", taskId));
   }
 
   // Files teammates' agents edited in the last week. Older databases without the table show none.
@@ -546,9 +634,9 @@ export class HackyApi {
     unwrap(await this.supabase.rpc("item_to_task", { target_item: itemId }));
   }
 
-  async addTask(teamId: string, title: string, area?: TaskArea): Promise<void> {
+  async addTask(teamId: string, title: string, area?: TaskArea, sprintId?: string): Promise<void> {
     if (area !== undefined && !TASK_AREAS.includes(area)) throw new Error(`Unknown area: ${area}`);
-    unwrap(await this.supabase.from("tasks").insert({ team_id: teamId, title: redact(title), ...(area && { area }) }));
+    unwrap(await this.supabase.from("tasks").insert({ team_id: teamId, title: redact(title), ...(area && { area }), ...(sprintId && { sprint_id: sprintId }) }));
   }
 
   // The GitHub repository the group linked, or null. Older databases without the table have none.
